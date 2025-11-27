@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tired Game</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto+Flex:opsz,wght@8..144,100;8..144,800;8..144,900&family=Inter:wght@400&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="css/jackpot-animations.css">
+    <script src="https://unpkg.com/@solana/web3.js@1.95.3/lib/index.iife.min.js"></script>
+    <script>
+        // Buffer polyfill for browser
+        if (typeof Buffer === 'undefined') {
+            window.Buffer = {
+                from: (data, encoding) => {
+                    if (typeof data === 'string') {
+                        return new TextEncoder().encode(data);
+                    }
+                    return new Uint8Array(data);
+                },
+                isBuffer: (obj) => {
+                    return obj instanceof Uint8Array;
+                }
+            };
+        }
+        
+        // Ensure solanaWeb3 is available
+        if (window.solanaWeb3) {
+            console.log('Solana Web3.js loaded successfully');
+        } else {
+            console.error('Solana Web3.js failed to load');
+        }
+    </script>
+</head>
+<body class="page-home">
+    <!-- Header -->
+    <header class="header">
+        <div class="header-content">
+            <div class="header-brand"><span class="brand-label">$TIRED</span></div>
+            <div id="user-section" class="user-info hidden">
+                <div class="user-dropdown">
+                    <button class="user-dropdown-button" id="userDropdownButton">
+                        <span class="wallet-address-short" id="wallet-address-short"></span>
+                        <span class="dropdown-arrow">▼</span>
+                    </button>
+                    <div class="user-dropdown-content" id="userDropdownContent">
+                        <div class="dropdown-balance">
+                            <span class="balance-label">Balance:</span>
+                            <span class="balance-amount" id="balance">0.0000 TIRED</span>
+                        </div>
+                        <div class="dropdown-actions">
+                            <button class="dropdown-logout-button" id="logoutButton">LOG OUT</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="auth-button-section" class="auth-header">
+                <div class="header-nav">
+                    <button class="nav-button" id="howItWorksButton">HOW TO PLAY</button>
+                    <button class="nav-button" id="rulesButton">RULES</button>
+                </div>
+                <button id="authButtonHeader" class="connect-wallet-button">CONNECT WALLET</button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Hero -->
+    <section class="hero hidden" id="hero-section">
+        <video class="hero-video" autoplay muted loop playsinline>
+            <source src="img/main/rotation_pack.mp4" type="video/mp4">
+        </video>
+        <div class="hero-content">
+            <h1 class="hero-title">TIRED CARD GAME</h1>
+            <div class="hero-actions">
+                <p class="hero-subtitle">OPEN.COLLECT.WIN</p>
+                <button class="hero-connect-button" id="hero-connect-button">CONNECT WALLET</button>
+            </div>
+        </div>
+    </section>
+
+    <!-- Jackpots row: RTJ and Last Jackpot side by side -->
+    <section class="jackpots-row">
+        <!-- Real-time Jackpot block (home only) -->
+        <section class="jackpot-section" id="rtj-section">
+            <div class="jackpot-card">
+                <div class="jackpot-title">EVERYDAY LOTTERY</div>
+                <div class="jackpot-amount" id="rtj-amount">0 $TIRED</div>
+                <div class="jackpot-timer" id="rtj-timer">Time Left: --:--:--</div>
+            </div>
+        </section>
+
+        <!-- Last jackpot summary (home only) -->
+        <section class="last-jackpot-section" id="lastj-section">
+            <div class="last-card">
+                <div class="last-header">
+                    <div class="last-title">LAST JACKPOT</div>
+                </div>
+                <div class="last-prize-section">
+                    <div class="last-amount" id="lastj-amount">0 $TIRED</div>
+                </div>
+                <div class="last-winner-section" id="lastj-winner" style="display: none;">
+                    <div class="winner-wallet">
+                        Wallet winner: <span id="lastj-winner-wallet">-</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </section>
+
+    <!-- Super Jackpot block (home only) -->
+    <section class="super-jackpot-section" id="superj-section">
+        <div class="super-jackpot-card">
+            <div class="super-jackpot-title">SUPER JACKPOT</div>
+            <div class="super-jackpot-amount" id="superj-amount">0 $TIRED</div>
+            <div class="super-jackpot-description">Collect all cards to win!</div>
+        </div>
+    </section>
+
+    <!-- Hero Pack Opening Section -->
+    <section class="hero-pack-section" id="hero-pack-section">
+        <div class="hero-pack-container">
+            <div class="hero-pack-video">
+                <video class="pack-opening-video" autoplay muted loop playsinline>
+                    <source src="img/main/opening_pack.mp4" type="video/mp4">
+                </video>
+            </div>
+            <div class="hero-pack-content">
+                <div class="hero-pack-text">
+                    <div class="hero-pack-description">
+                        more than 100 unique cards<br>
+                        with crypto people and<br>
+                        memes
+                    </div>
+                    <button class="hero-pack-button" id="hero-pack-connect-button">OPEN FIRST PACK</button>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- How to Play Section -->
+    <section class="how-to-play-section" id="how-to-play-section">
+        <div class="how-to-play-container">
+            <div class="how-to-play-header">
+                <h2 class="how-to-play-title">HOW TO PLAY</h2>
+                <div class="how-to-play-underline"></div>
+            </div>
+            
+            <div class="how-to-play-connect">
+                <div class="connect-text">CONNECT YOUR WALLET</div>
+                <button class="connect-button" id="how-to-play-connect-button">CONNECT</button>
+            </div>
+            
+            <div class="how-to-play-steps">
+                <div class="step">
+                    <div class="step-image">
+                        <img src="img/main/how1.png" alt="Step 1" class="step-img">
+                    </div>
+                    <div class="step-text">GO TO SHOP, CHOOSE AND BUY YOUR FIRST PACK</div>
+                </div>
+                
+                <div class="step">
+                    <div class="step-image">
+                        <img src="img/main/how2.gif" alt="Step 2" class="step-img">
+                    </div>
+                    <div class="step-text">OPEN A PACK. YOU WILL GOT ONE CARD FROM PACK, EACH CARD GIVES YOU A CHANCE TO WIN EVERYDAY LOTTERY</div>
+                </div>
+                
+                <div class="step">
+                    <div class="step-image">
+                        <img src="img/main/how3.png" alt="Step 3" class="step-img">
+                    </div>
+                    <div class="step-text">COLLECT THE ENTIRE CARD COLLECTION AND CLAIM THE SUPER JACKPOT.</div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Battle Section -->
+    <section class="promo-section" id="promo-section">
+        <div class="promo-container">
+            <div class="promo-header">
+                <h2 class="promo-title">MORE CARDS MORE CHANCE TO WIN</h2>
+            </div>
+            
+            <div class="promo-content">
+                <div class="promo-text">
+                    COMPETE IN PVP AND STEAL YOUR OPPONENT'S CARDS
+                </div>
+                <div class="promo-image">
+                    <img src="img/main/bar.png" alt="Promo" class="promo-img">
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Distribution Rules Section -->
+    <section class="distribution-section" id="distribution-section">
+        <div class="distribution-container">
+            <div class="distribution-header">
+                <h2 class="distribution-title">THE DISTRIBUTION RULE FOR COINS</h2>
+                <div class="distribution-underline"></div>
+            </div>
+            
+            <div class="distribution-rules">
+                <div class="rule-column">
+                    <div class="rule-item">
+                        <span class="rule-percentage">25%</span>
+                        <span class="rule-description">to burning</span>
+                    </div>
+                    <div class="rule-item">
+                        <span class="rule-percentage">15%</span>
+                        <span class="rule-description">to referrals</span>
+                    </div>
+                    <div class="rule-item">
+                        <span class="rule-percentage">10%</span>
+                        <span class="rule-description">to the daily jackpot</span>
+                    </div>
+                </div>
+                <div class="rule-column">
+                    <div class="rule-item">
+                        <span class="rule-percentage">5%</span>
+                        <span class="rule-description">to the super jackpot</span>
+                    </div>
+                    <div class="rule-item">
+                        <span class="rule-percentage">5%</span>
+                        <span class="rule-description">to the developers</span>
+                    </div>
+                    <div class="rule-item">
+                        <span class="rule-percentage">40%</span>
+                        <span class="rule-description">distributed back through pack openings</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Nostalgia Section -->
+    <section class="nostalgia-section" id="nostalgia-section">
+        <div class="nostalgia-container">
+            <div class="nostalgia-image-container">
+                <img src="img/main/pc_last.png" alt="Nostalgia" class="nostalgia-image desktop-image">
+                <img src="img/main/mb_last.png" alt="Nostalgia" class="nostalgia-image mobile-image">
+                <div class="nostalgia-text">
+                    <p>Do you remember collecting baseball cards? Or Pokémon? These are all memories we want to bring back for you, dear friend. Only now, the cards are from the world of memecoins. Collect all the cards and win the super jackpot.</p>
+                </div>
+            </div>
+            <div class="nostalgia-bottom-text">
+                <p>ENJOY AND HAVE FUN.</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="footer-section hidden" id="footer">
+        <div class="footer-inner">
+            <div class="footer-title">EVERY PULL DRAINS YOUR HOPE. EVERY TICKET FUELS YOUR LUCK.</div>
+            <div class="footer-links">
+                <a href="https://t.me/tiredctoo" class="footer-link">Telegram</a>
+                <a href="https://sotiredbro.com" class="footer-link">sotiredbro.com</a>
+                <a href="https://x.com/imtiredofcrypto" class="footer-link">x.com</a>
+            </div>
+            <img src="img/footer.png" alt="Footer" class="footer-image">
+        </div>
+        <div class="footer-base"></div>
+    </footer>
+
+    <script src="scripts/main.js"></script>
+
+    <!-- Message notification -->
+    <div id="message" class="hidden"></div>
+
+    <!-- Purchase / Open Modal -->
+    <div id="modal-overlay" class="modal-overlay hidden"></div>
+    <div id="purchase-modal" class="modal hidden">
+        <div class="modal-body" id="modal-body">
+            <!-- dynamic content -->
+        </div>
+    </div>
+</body>
+</html>

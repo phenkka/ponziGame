@@ -1,0 +1,80 @@
+/* Jackpot Animations - Only for Home Page */
+
+/* Real Time Jackpot Section Animation */
+.page-home .jackpot-section {
+    transform: translateX(-100%);
+    opacity: 0;
+    transition: all 1.5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.page-home .jackpot-section.animate-in {
+    transform: translateX(0);
+    opacity: 1;
+}
+
+.page-home .jackpot-section.animate-out {
+    transform: translateX(-100%);
+    opacity: 0;
+}
+
+/* Last Jackpot Section Animation */
+.page-home .last-jackpot-section {
+    transform: translateX(100%);
+    opacity: 0;
+    transition: all 1.5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Super Jackpot Section Animation */
+.page-home .super-jackpot-section {
+    transform: translateX(-100%);
+    opacity: 0;
+    transition: all 1.5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.page-home .super-jackpot-section.animate-in {
+    transform: translateX(0);
+    opacity: 1;
+}
+
+.page-home .super-jackpot-section.animate-out {
+    transform: translateX(-100%);
+    opacity: 0;
+}
+
+.page-home .last-jackpot-section.animate-in {
+    transform: translateX(0);
+    opacity: 1;
+}
+
+.page-home .last-jackpot-section.animate-out {
+    transform: translateX(100%);
+    opacity: 0;
+}
+
+/* Ensure jackpot sections are visible on other pages */
+.page-shop .jackpot-section,
+.page-cards .jackpot-section,
+.page-battle .jackpot-section,
+.page-profile .jackpot-section,
+.page-rules .jackpot-section {
+    transform: translateX(0) !important;
+    opacity: 1 !important;
+}
+
+.page-shop .last-jackpot-section,
+.page-cards .last-jackpot-section,
+.page-battle .last-jackpot-section,
+.page-profile .last-jackpot-section,
+.page-rules .last-jackpot-section {
+    transform: translateX(0) !important;
+    opacity: 1 !important;
+}
+
+.page-shop .super-jackpot-section,
+.page-cards .super-jackpot-section,
+.page-battle .super-jackpot-section,
+.page-profile .super-jackpot-section,
+.page-rules .super-jackpot-section {
+    transform: translateX(0) !important;
+    opacity: 1 !important;
+}

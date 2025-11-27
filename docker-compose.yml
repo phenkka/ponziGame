@@ -1,0 +1,41 @@
+networks:
+  gamba:
+
+services:
+  db:
+    image: postgres:15
+    env_file: .env
+    container_name: gamba_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/01_init.sql
+#      - ./db/inserts.sql:/docker-entrypoint-initdb.d/02_inserts.sql
+    ports:
+      - "5432:5432"
+    networks:
+      - gamba
+
+#  pgadmin:
+#    image: dpage/pgadmin4
+#    env_file: .env
+#    container_name: gamba_pg
+#    depends_on:
+#      - db
+#    ports:
+#      - "5050:80"
+#    networks:
+#      - gamba
+
+  app:
+    build: ./app
+    env_file: .env
+    container_name: gamba_web
+    depends_on:
+      - db
+    ports:
+      - "8000:8000"
+    networks:
+      - gamba
+
+volumes:
+  postgres_data:
