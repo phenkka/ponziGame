@@ -35,12 +35,16 @@ def setup_api_routes(app):
             signature_valid = verify_solana_signature(request.wallet, request.message, request.signature)
             print(f"Signature verification result: {signature_valid}")
             
-            # Временно отключаем проверку подписи для отладки (в продакшене обязательно включить!)
-            # if not signature_valid:
-            #     return {
-            #         "success": False,
-            #         "error": "Invalid signature. Authentication failed."
-            #     }
+            # Проверка подписи ВКЛЮЧЕНА
+            if not signature_valid:
+                print(f"Signature verification failed for wallet: {request.wallet[:10]}...")
+                return JSONResponse(
+                    status_code=200,
+                    content={
+                        "success": False,
+                        "error": "Invalid signature. Authentication failed."
+                    }
+                )
             
             conn = get_db_connection()
             cursor = conn.cursor(cursor_factory=RealDictCursor)

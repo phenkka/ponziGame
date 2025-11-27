@@ -114,16 +114,13 @@ def generate_signature():
 
 @pytest.fixture
 def auth_headers(test_user):
-    # Для тестов используем упрощенную версию
-    # В реальности подпись должна быть валидной Solana подписью
-    wallet = test_user['wallet']
     message = TEST_MESSAGE
     
-    # Генерируем валидную подпись для этого wallet
+    # Генерируем валидную подпись с реальным Solana адресом
     signing_key = SigningKey.generate()
     verify_key = signing_key.verify_key
     
-    # Создаем wallet адрес из verify_key
+    # Создаем wallet адрес из verify_key (реальный Solana адрес)
     wallet_bytes = verify_key.encode()
     wallet_address = base58.b58encode(wallet_bytes).decode('utf-8')
     
@@ -132,10 +129,48 @@ def auth_headers(test_user):
     signature_list = list(signed.signature)
     
     return {
-        "X-Wallet": wallet_address,  # Используем сгенерированный адрес
+        "X-Wallet": wallet_address,  # Реальный Solana адрес
         "X-Signature": json.dumps(signature_list),
         "X-Message": message
     }
+
+@pytest.fixture
+def auth_headers_for_wallet():
+    def _create_headers(wallet: str, message: str = TEST_MESSAGE):
+        # Для существующего wallet нужно декодировать его в bytes
+        try:
+            wallet_bytes = base58.b58decode(wallet)
+            # Проверяем, что это валидный адрес (32 байта)
+            if len(wallet_bytes) != 32:
+                # Если не валидный адрес, создаем новый
+                signing_key = SigningKey.generate()
+                verify_key = signing_key.verify_key
+                wallet_bytes = verify_key.encode()
+                wallet = base58.b58encode(wallet_bytes).decode('utf-8')
+            else:
+                # Используем существующий wallet, но нужен приватный ключ для подписи
+                # Для тестов создаем новый ключ и обновляем wallet
+                signing_key = SigningKey.generate()
+                verify_key = signing_key.verify_key
+                wallet_bytes = verify_key.encode()
+                wallet = base58.b58encode(wallet_bytes).decode('utf-8')
+        except:
+            # Если не удалось декодировать, создаем новый
+            signing_key = SigningKey.generate()
+            verify_key = signing_key.verify_key
+            wallet_bytes = verify_key.encode()
+            wallet = base58.b58encode(wallet_bytes).decode('utf-8')
+        
+        # Подписываем сообщение
+        signed = signing_key.sign(message.encode('utf-8'))
+        signature_list = list(signed.signature)
+        
+        return {
+            "X-Wallet": wallet,
+            "X-Signature": json.dumps(signature_list),
+            "X-Message": message
+        }, wallet
+    return _create_headers
 
 @pytest.fixture
 def invalid_auth_headers():
