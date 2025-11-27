@@ -1,6 +1,3 @@
-"""
-Интеграционные тесты для проверки полного flow авторизации.
-"""
 import pytest
 import sys
 from pathlib import Path
@@ -16,13 +13,9 @@ import base58
 
 
 class TestFullAuthFlow:
-    """Тесты полного flow авторизации с реальными подписями."""
-    
     @pytest.mark.asyncio
     async def test_full_auth_flow(self, clean_db):
-        """Тест полного flow: создание пользователя -> авторизация -> доступ к защищенным эндпоинтам."""
         async with AsyncClient(app=app, base_url="http://test") as client:
-            # Шаг 1: Создаем пользователя через /api/auth
             wallet_signing_key = SigningKey.generate()
             wallet_verify_key = wallet_signing_key.verify_key
             wallet_address = base58.b58encode(wallet_verify_key.encode()).decode('utf-8')
@@ -43,9 +36,7 @@ class TestFullAuthFlow:
             
             # Проверяем, что пользователь создан (может быть ошибка верификации, но не 401)
             assert auth_response.status_code != 401
-            
-            # Шаг 2: Пытаемся получить доступ к защищенному эндпоинту
-            # Создаем новую подпись для запроса
+
             request_message = "Gamba Auth: 1234567891"
             request_signed = wallet_signing_key.sign(request_message.encode('utf-8'))
             request_signature = list(request_signed.signature)
@@ -63,7 +54,6 @@ class TestFullAuthFlow:
     
     @pytest.mark.asyncio
     async def test_unauthorized_access_blocked(self):
-        """Тест: неавторизованный доступ блокируется."""
         async with AsyncClient(app=app, base_url="http://test") as client:
             # Пытаемся получить доступ без заголовков
             response = await client.get("/shop")
@@ -75,7 +65,6 @@ class TestFullAuthFlow:
     
     @pytest.mark.asyncio
     async def test_public_endpoints_accessible(self):
-        """Тест: публичные эндпоинты доступны без авторизации."""
         async with AsyncClient(app=app, base_url="http://test") as client:
             # Проверяем публичные эндпоинты
             public_endpoints = [
@@ -90,7 +79,6 @@ class TestFullAuthFlow:
     
     @pytest.mark.asyncio
     async def test_protected_endpoints_blocked(self):
-        """Тест: защищенные эндпоинты блокируются без авторизации."""
         async with AsyncClient(app=app, base_url="http://test") as client:
             # Проверяем защищенные эндпоинты
             protected_endpoints = [

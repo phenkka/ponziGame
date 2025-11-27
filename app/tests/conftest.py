@@ -1,6 +1,3 @@
-"""
-Pytest configuration and fixtures for testing.
-"""
 import pytest
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -19,7 +16,6 @@ TEST_MESSAGE = "Gamba Auth: 1234567890"
 
 @pytest.fixture(scope="session")
 def db_connection():
-    """Создает подключение к тестовой БД."""
     try:
         # Для локального запуска используем localhost, для Docker - db
         host = os.getenv("POSTGRES_HOST", "localhost")
@@ -53,7 +49,6 @@ def db_connection():
 
 @pytest.fixture(scope="function")
 def clean_db(db_connection):
-    """Очищает тестовые данные перед каждым тестом."""
     cursor = db_connection.cursor()
     cursor.execute("DELETE FROM Referral_system")
     cursor.execute("DELETE FROM Users")
@@ -69,7 +64,6 @@ def clean_db(db_connection):
 
 @pytest.fixture
 def test_user(db_connection, clean_db):
-    """Создает тестового пользователя в БД."""
     cursor = db_connection.cursor(cursor_factory=RealDictCursor)
     cursor.execute(
         "INSERT INTO Users (wallet, ref_code) VALUES (%s, %s) RETURNING *",
@@ -82,7 +76,6 @@ def test_user(db_connection, clean_db):
 
 @pytest.fixture
 def test_user_2(db_connection, clean_db):
-    """Создает второго тестового пользователя в БД."""
     cursor = db_connection.cursor(cursor_factory=RealDictCursor)
     cursor.execute(
         "INSERT INTO Users (wallet, ref_code) VALUES (%s, %s) RETURNING *",
@@ -95,7 +88,6 @@ def test_user_2(db_connection, clean_db):
 
 @pytest.fixture
 def generate_signature():
-    """Генерирует валидную подпись для тестового кошелька."""
     def _generate(wallet: str, message: str):
         # Для тестов создаем подпись используя приватный ключ
         # В реальности это делается на клиенте через Phantom
@@ -122,7 +114,6 @@ def generate_signature():
 
 @pytest.fixture
 def auth_headers(test_user):
-    """Создает заголовки авторизации для тестового пользователя."""
     # Для тестов используем упрощенную версию
     # В реальности подпись должна быть валидной Solana подписью
     wallet = test_user['wallet']
@@ -148,7 +139,6 @@ def auth_headers(test_user):
 
 @pytest.fixture
 def invalid_auth_headers():
-    """Создает невалидные заголовки авторизации."""
     return {
         "X-Wallet": "InvalidWallet",
         "X-Signature": json.dumps([1, 2, 3, 4, 5]),
@@ -157,6 +147,5 @@ def invalid_auth_headers():
 
 @pytest.fixture
 def missing_auth_headers():
-    """Возвращает пустые заголовки (без авторизации)."""
     return {}
 

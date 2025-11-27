@@ -1,7 +1,3 @@
-"""
-Главный файл приложения.
-Инициализирует FastAPI приложение и настраивает все роуты.
-"""
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,9 +8,6 @@ from routes.api import setup_api_routes
 
 
 def create_app() -> FastAPI:
-    """
-    Создает и настраивает FastAPI приложение.
-    """
     app = FastAPI(title="Tired Card Game API")
     
     # CORS middleware для работы с фронтендом
@@ -28,8 +21,7 @@ def create_app() -> FastAPI:
     
     # Middleware для проверки авторизации
     app.middleware("http")(auth_middleware)
-    
-    # Монтируем статические файлы (CSS, JS, изображения)
+
     app.mount("/css", StaticFiles(directory="public/css"), name="css")
     app.mount("/img", StaticFiles(directory="public/img"), name="img")
     app.mount("/scripts", StaticFiles(directory="public/scripts"), name="scripts")
@@ -40,8 +32,6 @@ def create_app() -> FastAPI:
     
     return app
 
-
-# Создаем приложение
 app = create_app()
 
 

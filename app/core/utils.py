@@ -1,6 +1,3 @@
-"""
-Вспомогательные функции для работы с БД, генерации кодов и верификации подписей.
-"""
 import psycopg2
 from psycopg2.extras import RealDictCursor
 import os
@@ -15,10 +12,6 @@ load_dotenv()
 
 
 def get_db_connection():
-    """
-    Создает подключение к БД.
-    Автоматически использует localhost, если host="db" недоступен (для локального запуска).
-    """
     host = os.getenv("POSTGRES_HOST", "db")
     database = os.getenv("POSTGRES_DB", "lab")
     user = os.getenv("POSTGRES_USER", "admin")
@@ -56,18 +49,11 @@ def get_db_connection():
 
 
 def generate_ref_code(length=8):
-    """
-    Генерация уникального реферального кода.
-    """
     characters = string.ascii_uppercase + string.digits
     return ''.join(secrets.choice(characters) for _ in range(length))
 
 
 def verify_solana_signature(wallet: str, message: str, signature: list) -> bool:
-    """
-    Верификация подписи Solana.
-    Проверяет, что подпись соответствует кошельку и сообщению.
-    """
     try:
         # Конвертируем wallet в PublicKey
         wallet_bytes = base58.b58decode(wallet)
