@@ -21,7 +21,7 @@ create table if not exists Cards(
     update_time date default current_date,
     name text,
     image_url text,
-    image_key text
+    image_key text unique
 );
 
 create table if not exists Card_User(
@@ -44,4 +44,22 @@ create table if not exists Chests(
     constraint ch_prob_check_with_loss
     check (prob_common >= 0 and prob_rare >= 0 and prob_epic >= 0 and prob_legendary >= 0 and chance_loss >= 0
            and prob_common + prob_rare + prob_epic + prob_legendary + chance_loss = 100)
+);
+
+create table if not exists Chest_purchases(
+    id_purchase bigserial primary key,
+    id_user bigint not null references Users(id_user),
+    id_chest int not null references Chests(id_chest),
+    tx_signature text not null unique,
+    created_at timestamp not null default now(),
+    is_opened boolean not null default false,
+    opened_at timestamp null
+);
+
+create table if not exists Chest_openings(
+    id_opening bigserial primary key,
+    id_purchase bigint references Chest_purchases(id_purchase) on delete set null,
+    id_user bigint not null references Users(id_user),
+    id_chest int not null references Chests(id_chest),
+    opened_at date default current_date
 );

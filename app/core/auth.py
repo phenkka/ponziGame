@@ -13,6 +13,7 @@ PUBLIC_API_ENDPOINTS = [
     "/api/whitelist",
     "/api/config",
     "/api/cards",  # Публичный просмотр карт
+    "/api/chests",  # Публичный просмотр паков
     "/api/jackpot",  # Публичный просмотр джекпота
     "/api/jackpot/last",
     "/api/jackpot/draw",  # Публичный розыгрыш джекпота

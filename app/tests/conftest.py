@@ -50,17 +50,49 @@ def db_connection():
 @pytest.fixture(scope="function")
 def clean_db(db_connection):
     cursor = db_connection.cursor()
-    cursor.execute("DELETE FROM Referral_system")
-    cursor.execute("DELETE FROM Users")
-    db_connection.commit()
-    cursor.close()
+    try:
+        # Удаляем в правильном порядке: сначала дочерние таблицы, потом родительские
+        # НЕ удаляем Chests и Cards - это справочные данные, которые должны быть всегда
+        cursor.execute("DELETE FROM Chest_openings")
+        cursor.execute("DELETE FROM Chest_purchases")
+        cursor.execute("DELETE FROM Card_User")
+        cursor.execute("DELETE FROM Referral_system")
+        cursor.execute("DELETE FROM Users")
+        # НЕ удаляем Cards и Chests - это статические справочные данные
+        db_connection.commit()
+    except Exception as e:
+        db_connection.rollback()
+        print(f"Error cleaning DB: {e}")
+    finally:
+        cursor.close()
+    
     yield
+    
     # Очистка после теста
     cursor = db_connection.cursor()
-    cursor.execute("DELETE FROM Referral_system")
-    cursor.execute("DELETE FROM Users")
-    db_connection.commit()
-    cursor.close()
+    try:
+        cursor.execute("DELETE FROM Chest_openings")
+        cursor.execute("DELETE FROM Chest_purchases")
+        cursor.execute("DELETE FROM Card_User")
+        cursor.execute("DELETE FROM Referral_system")
+        cursor.execute("DELETE FROM Users")
+        # Удаляем тестовые паки - дубликаты по параметрам (оставляем только первые 5 оригинальных)
+        # Удаляем все паки, кроме первых 5 (оригинальные из insert.sql)
+        cursor.execute("""
+            DELETE FROM Chests 
+            WHERE id_chest NOT IN (
+                SELECT id_chest 
+                FROM Chests 
+                ORDER BY id_chest 
+                LIMIT 5
+            )
+        """)
+        db_connection.commit()
+    except Exception as e:
+        db_connection.rollback()
+        print(f"Error cleaning DB after test: {e}")
+    finally:
+        cursor.close()
 
 @pytest.fixture
 def test_user(db_connection, clean_db):

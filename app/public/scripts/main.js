@@ -957,14 +957,37 @@ async function loadPacks(forShop = false) {
     const container = document.getElementById(forShop ? 'shop-packs-grid' : 'packs-grid');
     console.log('Container found:', container);
     if (!container) return;
+    // Очищаем контейнер перед добавлением
     container.innerHTML = '';
+    // Защита от повторного вызова - проверяем, не загружаются ли уже паки
+    if (container.dataset.loading === 'true') {
+        console.warn('Packs are already loading, skipping...');
+        return;
+    }
+    container.dataset.loading = 'true';
     // Reorder packs for shop: Broke -> Common -> Rare -> Epic -> Legendary
     const chestsOrdered = (() => {
       const arr = (data.chests || []).slice();
-      if (!forShop) return arr;
+      console.log('Chests array length:', arr.length);
+      if (arr.length === 0) {
+        console.warn('No chests found in database!');
+        return arr;
+      }
+      // Убираем дубликаты по id_chest (оставляем только первый)
+      const uniqueChests = [];
+      const seenIds = new Set();
+      arr.forEach(chest => {
+        if (!seenIds.has(chest.id_chest)) {
+          seenIds.add(chest.id_chest);
+          uniqueChests.push(chest);
+        }
+      });
+      console.log('Unique chests count:', uniqueChests.length);
+      if (!forShop) return uniqueChests;
       const order = { 5: 0, 1: 1, 2: 2, 3: 3, 4: 4 };
-      return arr.sort((a, b) => (order[a.id_chest] ?? 99) - (order[b.id_chest] ?? 99));
+      return uniqueChests.sort((a, b) => (order[a.id_chest] ?? 99) - (order[b.id_chest] ?? 99));
     })();
+    console.log('Chests ordered length:', chestsOrdered.length);
     chestsOrdered.forEach((chest) => {
       let packImage = 'common.png';
       if (chest.id_chest === 2) packImage = 'rare.png'; else if (chest.id_chest === 3) packImage = 'epic.png'; else if (chest.id_chest === 4) packImage = 'legendary.png'; else if (chest.id_chest === 5) packImage = 'broke.png';
@@ -984,7 +1007,13 @@ async function loadPacks(forShop = false) {
     // Removed price increase info block on shop page per request
     container.querySelectorAll('.pack-buy-btn').forEach(btn => btn.addEventListener('click', async () => { if (!currentWallet) { await connectWallet(); return; } const id = btn.getAttribute('data-id'); await purchaseChest(id, data.chests); }));
     updatePackButtons();
-  } catch (e) { console.error('Load packs error', e); }
+    // Снимаем флаг загрузки
+    container.dataset.loading = 'false';
+  } catch (e) { 
+    console.error('Load packs error', e);
+    // Снимаем флаг загрузки в случае ошибки
+    if (container) container.dataset.loading = 'false';
+  }
 }
 
 function updatePackButtons() {
@@ -1020,42 +1049,101 @@ async function purchaseChest(idChest, chestsCache) {
     if (!window.Web3Lib || !window.SPLLite) { showMessage('Initialization error, please reload the page'); return; }
     const { Connection, PublicKey, Transaction } = window.Web3Lib;
     const { getAssociatedTokenAddress, createTransferCheckedInstruction } = window.SPLLite;
-    const cfgOk = cfg && cfg.mint && cfg.merchant && cfg.rpcUrl;
-    if (!cfgOk) { showMessage('Invalid config'); return; }
+    // Проверяем конфигурацию (mint может быть пустым для SOL transfers)
+    const cfgOk = cfg && cfg.merchant && cfg.rpcUrl;
+    if (!cfgOk) { 
+      console.error('Invalid config:', cfg);
+      showMessage('Invalid config: missing merchant or RPC URL'); 
+      return; 
+    }
+    // Если mint не указан, используем SOL transfer (но это не поддерживается сейчас)
+    if (!cfg.mint) {
+      console.warn('TOKEN_MINT not configured, token transfers will fail');
+      showMessage('Token mint not configured. Please contact support.');
+      return;
+    }
     let price = 0;
     if (Array.isArray(chestsCache)) { const c = chestsCache.find(c => c.id_chest === Number(idChest)); price = c ? Number(c.price) : 0; }
     else { try { const resp = await fetch('/api/chests'); const d = await resp.json(); if (d && d.success) { const c = (d.chests || []).find(c => c.id_chest === Number(idChest)); price = c ? Number(c.price) : 0; } } catch {} }
     try {
+      console.log('Creating connection to:', cfg.rpcUrl);
       const connection = new Connection(cfg.rpcUrl);
+      console.log('Creating PublicKeys...');
       const mintPk = new PublicKey(cfg.mint);
       const buyerPk = new PublicKey(currentWallet);
       const merchantPk = new PublicKey(cfg.merchant);
+      console.log('Getting associated token addresses...');
       const buyerAta = await getAssociatedTokenAddress(mintPk, buyerPk);
       const merchantAta = await getAssociatedTokenAddress(mintPk, merchantPk);
+      console.log('Getting mint info...');
       const mintInfo = await connection.getParsedAccountInfo(mintPk);
       const decimals = (mintInfo && mintInfo.value && mintInfo.value.data && mintInfo.value.data.parsed && mintInfo.value.data.parsed.info && mintInfo.value.data.parsed.info.decimals) ? mintInfo.value.data.parsed.info.decimals : 0;
+      console.log('Mint decimals:', decimals, 'Price:', price);
       const amountRaw = Math.round(Number(price) * Math.pow(10, decimals));
+      console.log('Amount raw:', amountRaw);
       const tx = new Transaction();
+      console.log('Checking merchant ATA...');
       const merchantAtaInfo = await connection.getAccountInfo(merchantAta);
       if (!merchantAtaInfo) {
+        console.log('Creating merchant ATA...');
         const rentSysvar = new PublicKey('SysvarRent111111111111111111111111111111111');
         const keys = [ { pubkey: buyerPk, isSigner: true, isWritable: true }, { pubkey: merchantAta, isSigner: false, isWritable: true }, { pubkey: merchantPk, isSigner: false, isWritable: false }, { pubkey: mintPk, isSigner: false, isWritable: false }, { pubkey: window.Web3Lib.SystemProgram.programId, isSigner: false, isWritable: false }, { pubkey: window.SPLLite.TOKEN_PROGRAM_ID, isSigner: false, isWritable: false }, { pubkey: rentSysvar, isSigner: false, isWritable: false } ];
         tx.add(new window.Web3Lib.TransactionInstruction({ keys, programId: window.SPLLite.ASSOCIATED_TOKEN_PROGRAM_ID, data: new Uint8Array([]) }));
       }
+      console.log('Adding transfer instruction...');
       tx.add(createTransferCheckedInstruction(buyerAta, mintPk, merchantAta, buyerPk, amountRaw, decimals));
+      console.log('Getting latest blockhash...');
       const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
       tx.recentBlockhash = blockhash; tx.feePayer = buyerPk;
       let txSignature;
-      if (provider.signAndSendTransaction) { const sendRes = await provider.signAndSendTransaction(tx); txSignature = sendRes.signature || sendRes; }
-      else if (provider.signTransaction) { const signedTx = await provider.signTransaction(tx); txSignature = await connection.sendRawTransaction(signedTx.serialize(), { skipPreflight: false, maxRetries: 3 }); }
-      else { showMessage('Your Phantom version does not support sending transactions'); return; }
-      try { await connection.confirmTransaction({ signature: txSignature, blockhash, lastValidBlockHeight }, 'confirmed'); } catch {}
+      console.log('Signing and sending transaction...');
+      if (provider.signAndSendTransaction) { 
+        try {
+          const sendRes = await provider.signAndSendTransaction(tx); 
+          txSignature = sendRes.signature || sendRes;
+          console.log('Transaction sent, signature:', txSignature);
+        } catch (txError) {
+          console.error('Transaction error:', txError);
+          showMessage(txError?.message || 'Transaction failed. Check console for details.');
+          return;
+        }
+      }
+      else if (provider.signTransaction) { 
+        try {
+          const signedTx = await provider.signTransaction(tx); 
+          txSignature = await connection.sendRawTransaction(signedTx.serialize(), { skipPreflight: false, maxRetries: 3 });
+          console.log('Transaction sent, signature:', txSignature);
+        } catch (txError) {
+          console.error('Transaction error:', txError);
+          showMessage(txError?.message || 'Transaction failed. Check console for details.');
+          return;
+        }
+      }
+      else { 
+        showMessage('Your Phantom version does not support sending transactions'); 
+        return; 
+      }
+      console.log('Confirming transaction...');
+      try { 
+        await connection.confirmTransaction({ signature: txSignature, blockhash, lastValidBlockHeight }, 'confirmed'); 
+        console.log('Transaction confirmed');
+      } catch (confirmError) {
+        console.warn('Transaction confirmation error (non-critical):', confirmError);
+      }
+      console.log('Sending purchase request to backend...');
       const res = await fetch('/api/chests/buy', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wallet: currentWallet, id_chest: Number(idChest), txSignature }) });
       const resp = await res.json();
+      console.log('Backend response:', resp);
       if (resp.success) {
         showPurchaseModal(Number(idChest));
-      } else showMessage(resp.error || 'Failed to buy pack');
-    } catch (e) { console.error('Transfer error', e); showMessage(e?.message || 'Transfer error'); }
+      } else {
+        showMessage(resp.error || 'Failed to buy pack');
+      }
+    } catch (e) { 
+      console.error('Transfer error:', e); 
+      console.error('Error stack:', e.stack);
+      showMessage(e?.message || 'Transfer error. Check console for details.'); 
+    }
   } catch (e) { console.error('Buy flow error', e); const msg = (e && (e.message || e.code || e.toString())) || 'Purchase error'; showMessage(msg); }
 }
 

@@ -5,8 +5,9 @@ import hashlib
 import json
 
 from core.models import AuthRequest
-from core.utils import get_db_connection, generate_ref_code, verify_solana_signature
+from core.utils import get_db_connection, generate_ref_code, verify_solana_signature, verify_solana_transaction, HELIUS_RPC_URL
 from core.auth import verify_auth
+from pydantic import BaseModel
 
 
 def setup_api_routes(app):
@@ -216,17 +217,265 @@ def setup_api_routes(app):
     
     @app.get("/api/chests")
     async def get_chests():
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            cursor.execute("""
+                SELECT DISTINCT ON (id_chest) id_chest, prob_common, prob_rare, prob_epic, prob_legendary, 
+                       chance_loss, price, update_time
+                FROM Chests
+                ORDER BY id_chest, update_time DESC
+            """)
+            chests = cursor.fetchall()
+            
+            print(f"Found {len(chests)} chests in database")
+            if len(chests) == 0:
+                print("WARNING: No chests found in database! Check if insert.sql was executed.")
+            
+            cursor.close()
+            conn.close()
+            
+            return {
+                "success": True,
+                "chests": [dict(chest) for chest in chests]
+            }
+        except Exception as e:
+            print(f"Get chests error: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "chests": []
+            }
+    
+    @app.get("/api/user/{wallet}/chests")
+    async def get_user_chests(wallet: str, request: Request):
+        # Проверяем авторизацию
+        x_wallet = request.headers.get("X-Wallet")
+        x_signature = request.headers.get("X-Signature")
+        x_message = request.headers.get("X-Message")
+        
+        if not x_wallet or not x_signature or not x_message:
+            auth_token = request.cookies.get("auth_token")
+            if auth_token:
+                try:
+                    from core.sessions import verify_session_cookie
+                    auth_data = await verify_session_cookie(request)
+                    if auth_data["wallet"] != wallet:
+                        raise HTTPException(status_code=403, detail="Access denied")
+                except Exception as e:
+                    raise HTTPException(status_code=401, detail="Invalid session")
+            else:
+                raise HTTPException(status_code=401, detail="Authentication required")
+        else:
+            try:
+                auth_data = await verify_auth(x_wallet=x_wallet, x_signature=x_signature, x_message=x_message)
+                if auth_data["wallet"] != wallet:
+                    raise HTTPException(status_code=403, detail="Access denied")
+            except HTTPException:
+                raise
+        
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            # Получаем id_user
+            cursor.execute("SELECT id_user FROM Users WHERE wallet = %s", (wallet,))
+            user = cursor.fetchone()
+            if not user:
+                cursor.close()
+                conn.close()
+                return {"success": False, "error": "User not found", "chests": []}
+            
+            # Получаем паки пользователя
+            cursor.execute("""
+                SELECT cp.id_purchase, cp.id_chest, cp.created_at, cp.is_opened, cp.opened_at,
+                       c.prob_common, c.prob_rare, c.prob_epic, c.prob_legendary, c.price
+                FROM Chest_purchases cp
+                JOIN Chests c ON cp.id_chest = c.id_chest
+                WHERE cp.id_user = %s
+                ORDER BY cp.created_at DESC
+            """, (user['id_user'],))
+            chests = cursor.fetchall()
+            
+            cursor.close()
+            conn.close()
+            
+            return {
+                "success": True,
+                "chests": [dict(chest) for chest in chests]
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            print(f"Get user chests error: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "chests": []
+            }
+    
+    @app.get("/api/balance/{wallet}")
+    async def get_balance(wallet: str, request: Request):
+        # Проверяем авторизацию
+        x_wallet = request.headers.get("X-Wallet")
+        x_signature = request.headers.get("X-Signature")
+        x_message = request.headers.get("X-Message")
+        
+        if not x_wallet or not x_signature or not x_message:
+            auth_token = request.cookies.get("auth_token")
+            if auth_token:
+                try:
+                    from core.sessions import verify_session_cookie
+                    auth_data = await verify_session_cookie(request)
+                    if auth_data["wallet"] != wallet:
+                        raise HTTPException(status_code=403, detail="Access denied")
+                except Exception as e:
+                    raise HTTPException(status_code=401, detail="Invalid session")
+            else:
+                raise HTTPException(status_code=401, detail="Authentication required")
+        else:
+            try:
+                auth_data = await verify_auth(x_wallet=x_wallet, x_signature=x_signature, x_message=x_message)
+                if auth_data["wallet"] != wallet:
+                    raise HTTPException(status_code=403, detail="Access denied")
+            except HTTPException:
+                raise
+        
+        # Заглушка - возвращаем нулевой баланс
         return {
             "success": True,
-            "chests": []
+            "balance": {
+                "amount": 0,
+                "decimals": 9,
+                "symbol": "TIRED"
+            }
         }
+    
+    @app.get("/api/user/{wallet}/cards")
+    async def get_user_cards(wallet: str, request: Request):
+        # Проверяем авторизацию
+        x_wallet = request.headers.get("X-Wallet")
+        x_signature = request.headers.get("X-Signature")
+        x_message = request.headers.get("X-Message")
+        
+        if not x_wallet or not x_signature or not x_message:
+            auth_token = request.cookies.get("auth_token")
+            if auth_token:
+                try:
+                    from core.sessions import verify_session_cookie
+                    auth_data = await verify_session_cookie(request)
+                    if auth_data["wallet"] != wallet:
+                        raise HTTPException(status_code=403, detail="Access denied")
+                except Exception as e:
+                    raise HTTPException(status_code=401, detail="Invalid session")
+            else:
+                raise HTTPException(status_code=401, detail="Authentication required")
+        else:
+            try:
+                auth_data = await verify_auth(x_wallet=x_wallet, x_signature=x_signature, x_message=x_message)
+                if auth_data["wallet"] != wallet:
+                    raise HTTPException(status_code=403, detail="Access denied")
+            except HTTPException:
+                raise
+        
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            # Получаем id_user
+            cursor.execute("SELECT id_user FROM Users WHERE wallet = %s", (wallet,))
+            user = cursor.fetchone()
+            if not user:
+                cursor.close()
+                conn.close()
+                return {"success": False, "error": "User not found", "cards": []}
+            
+            # Получаем карты пользователя
+            cursor.execute("""
+                SELECT c.id_card, c.rarity, c.start_bounty, c.name, c.image_url, c.image_key,
+                       COALESCE(cu.quantity, 0) as quantity
+                FROM Cards c
+                LEFT JOIN Card_User cu ON c.id_card = cu.id_card AND cu.id_user = %s
+                WHERE cu.quantity > 0 OR cu.id_user IS NULL
+                ORDER BY c.rarity, c.id_card
+            """, (user['id_user'],))
+            cards = cursor.fetchall()
+            
+            cursor.close()
+            conn.close()
+            
+            return {
+                "success": True,
+                "cards": [dict(card) for card in cards if card['quantity'] > 0]
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            print(f"Get user cards error: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "cards": []
+            }
+    
+    @app.get("/api/cards")
+    async def get_cards(rarity: str = None, hasImage: bool = None):
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            query = "SELECT id_card, rarity, start_bounty, name, image_url, image_key FROM Cards WHERE 1=1"
+            params = []
+            
+            if rarity:
+                query += " AND rarity = %s"
+                params.append(rarity)
+            
+            if hasImage:
+                query += " AND image_url IS NOT NULL AND image_url != ''"
+            
+            query += " ORDER BY rarity, id_card"
+            
+            cursor.execute(query, params)
+            cards = cursor.fetchall()
+            
+            cursor.close()
+            conn.close()
+            
+            return {
+                "success": True,
+                "cards": [dict(card) for card in cards]
+            }
+        except Exception as e:
+            print(f"Get cards error: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "cards": []
+            }
     
     @app.get("/api/config")
     async def get_config():
+        """Получить конфигурацию для клиента"""
+        import os
+        merchant = os.getenv("MERCHANT_WALLET", "")
+        mint = os.getenv("TOKEN_MINT", "")
+        rpc_url = HELIUS_RPC_URL
+        
+        # Проверяем, что все необходимые переменные установлены
+        if not merchant or merchant == "11111111111111111111111111111111":
+            print("WARNING: MERCHANT_WALLET not configured or using default value")
+        if not mint:
+            print("WARNING: TOKEN_MINT not configured")
+        if not rpc_url or rpc_url == "https://api.mainnet-beta.solana.com":
+            print("WARNING: HELIUS_RPC_URL not configured, using default Solana RPC")
+        
         return {
             "success": True,
-            "rpcUrl": "https://api.mainnet-beta.solana.com",
-            "merchant": "11111111111111111111111111111111"  # Заглушка
+            "rpcUrl": rpc_url,  # Используем Helius RPC
+            "merchant": merchant if merchant else "11111111111111111111111111111111",
+            "mint": mint  # Адрес токена TIRED
         }
     
     @app.get("/api/super-jackpot")
@@ -235,6 +484,153 @@ def setup_api_routes(app):
             "success": True,
             "amount": 0
         }
+    
+    @app.post("/api/chests/buy")
+    async def buy_chest(request: Request):
+        """Покупка пака с проверкой транзакции"""
+        try:
+            # Получаем данные из запроса
+            body = await request.json()
+            wallet = body.get("wallet")
+            id_chest = body.get("id_chest")
+            tx_signature = body.get("txSignature")
+            
+            if not wallet or not id_chest or not tx_signature:
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "error": "Missing required fields: wallet, id_chest, txSignature"}
+                )
+            
+            # Проверяем авторизацию
+            x_wallet = request.headers.get("X-Wallet")
+            x_signature = request.headers.get("X-Signature")
+            x_message = request.headers.get("X-Message")
+            
+            if not x_wallet or not x_signature or not x_message:
+                auth_token = request.cookies.get("auth_token")
+                if auth_token:
+                    try:
+                        from core.sessions import verify_session_cookie
+                        auth_data = await verify_session_cookie(request)
+                        if auth_data["wallet"] != wallet:
+                            return JSONResponse(
+                                status_code=403,
+                                content={"success": False, "error": "Access denied"}
+                            )
+                    except Exception as e:
+                        return JSONResponse(
+                            status_code=401,
+                            content={"success": False, "error": "Invalid session"}
+                        )
+                else:
+                    return JSONResponse(
+                        status_code=401,
+                        content={"success": False, "error": "Authentication required"}
+                    )
+            else:
+                try:
+                    auth_data = await verify_auth(x_wallet=x_wallet, x_signature=x_signature, x_message=x_message)
+                    if auth_data["wallet"] != wallet:
+                        return JSONResponse(
+                            status_code=403,
+                            content={"success": False, "error": "Access denied"}
+                        )
+                except HTTPException as e:
+                    return JSONResponse(
+                        status_code=e.status_code,
+                        content={"success": False, "error": e.detail}
+                    )
+            
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            # Проверяем, что транзакция не использовалась ранее
+            cursor.execute("SELECT id_purchase FROM Chest_purchases WHERE tx_signature = %s", (tx_signature,))
+            existing = cursor.fetchone()
+            if existing:
+                cursor.close()
+                conn.close()
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "error": "Transaction already used"}
+                )
+            
+            # Получаем информацию о паке
+            cursor.execute("SELECT * FROM Chests WHERE id_chest = %s", (id_chest,))
+            chest = cursor.fetchone()
+            if not chest:
+                cursor.close()
+                conn.close()
+                return JSONResponse(
+                    status_code=404,
+                    content={"success": False, "error": "Chest not found"}
+                )
+            
+            # Получаем пользователя
+            cursor.execute("SELECT id_user FROM Users WHERE wallet = %s", (wallet,))
+            user = cursor.fetchone()
+            if not user:
+                cursor.close()
+                conn.close()
+                return JSONResponse(
+                    status_code=404,
+                    content={"success": False, "error": "User not found"}
+                )
+            
+            # Получаем конфигурацию для проверки транзакции
+            import os
+            merchant = os.getenv("MERCHANT_WALLET", "11111111111111111111111111111111")  # Fallback для тестов
+            mint = os.getenv("TOKEN_MINT", "")
+            
+            # Верифицируем транзакцию на блокчейне через Helius RPC
+            price = float(chest['price'])
+            tx_verification = verify_solana_transaction(
+                tx_signature=tx_signature,
+                expected_sender=wallet,
+                expected_receiver=merchant,
+                expected_amount=price,
+                rpc_url=HELIUS_RPC_URL,  # Используем Helius RPC
+                mint_address=mint if mint else None
+            )
+            
+            if not tx_verification.get("valid"):
+                cursor.close()
+                conn.close()
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "success": False,
+                        "error": f"Transaction verification failed: {tx_verification.get('error', 'Unknown error')}"
+                    }
+                )
+            
+            # Создаем запись о покупке
+            cursor.execute("""
+                INSERT INTO Chest_purchases (id_user, id_chest, tx_signature)
+                VALUES (%s, %s, %s)
+                RETURNING id_purchase
+            """, (user['id_user'], id_chest, tx_signature))
+            
+            purchase = cursor.fetchone()
+            conn.commit()
+            
+            cursor.close()
+            conn.close()
+            
+            return {
+                "success": True,
+                "purchase_id": purchase['id_purchase'],
+                "message": "Pack purchased successfully"
+            }
+            
+        except Exception as e:
+            print(f"Buy chest error: {e}")
+            import traceback
+            traceback.print_exc()
+            return JSONResponse(
+                status_code=500,
+                content={"success": False, "error": f"Internal error: {str(e)}"}
+            )
     
     @app.get("/health")
     async def health_check():
