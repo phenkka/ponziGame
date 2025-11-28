@@ -299,12 +299,12 @@ function showPage(pageId) {
     else headerEl.classList.remove('header-shop');
   }
   if (pageId === 'chests') loadChests();
-  if (pageId === 'home') { loadPacks(); loadHomeCollections(); loadJackpot(); }
-  if (pageId === 'shop') loadPacks(true);
-  if (pageId === 'rules') loadJackpot();
-  if (pageId === 'refferal') { loadJackpot(); loadReferral(); }
-  if (pageId === 'battle') { loadJackpot(); }
-  if (pageId === 'cards' && (currentWallet || hasSession)) { loadJackpot(); loadUserChests(currentWallet || localStorage.getItem('wallet')); loadUserCards(currentWallet || localStorage.getItem('wallet')); loadMyPacks(currentWallet || localStorage.getItem('wallet')); }
+  if (pageId === 'home') { loadPacks(); loadHomeCollections(); loadJackpot(); loadSuperJackpot(); }
+  if (pageId === 'shop') { loadPacks(true); loadSuperJackpot(); }
+  if (pageId === 'rules') { loadJackpot(); loadSuperJackpot(); }
+  if (pageId === 'refferal') { loadJackpot(); loadSuperJackpot(); loadReferral(); }
+  if (pageId === 'battle') { loadJackpot(); loadSuperJackpot(); }
+  if (pageId === 'cards' && (currentWallet || hasSession)) { loadJackpot(); loadSuperJackpot(); loadUserChests(currentWallet || localStorage.getItem('wallet')); loadUserCards(currentWallet || localStorage.getItem('wallet')); loadMyPacks(currentWallet || localStorage.getItem('wallet')); }
 }
 
 // Setup handlers and initial routing
@@ -345,6 +345,7 @@ document.addEventListener('DOMContentLoaded', () => {
   window.showUserInfo = showUserInfo;
   window.loadPacks = loadPacks;
   window.loadJackpot = loadJackpot;
+  window.loadSuperJackpot = loadSuperJackpot;
 
   const authBtn = document.getElementById('authButtonHeader');
   if (authBtn) {
@@ -578,6 +579,7 @@ document.addEventListener('DOMContentLoaded', () => {
       fetch(`/api/user/${storedWallet}`).then(r => r.json()).then(d => { if (d && d.success) showUserInfo(storedWallet, d.user.ref_code, { redirect: false }); }).catch(() => {});
     }
     loadJackpot();
+    loadSuperJackpot();
     const toggleBtn = document.getElementById('toggle-collections-btn');
     const coll = document.getElementById('home-collections');
     if (toggleBtn && coll) {
@@ -609,12 +611,14 @@ document.addEventListener('DOMContentLoaded', () => {
         const timerElRules = document.getElementById('rtj-timer-rules');
         if (amountElRules && timerElRules) {
             loadJackpot();
+            loadSuperJackpot();
         }
     }
   });
 });
 
 let jackpotTimerInterval = null;
+let superJackpotUpdateInterval = null;
 
 async function loadJackpot() {
     console.log('=== loadJackpot() function called ===');
@@ -751,6 +755,14 @@ async function loadJackpot() {
       
       // Load super jackpot
       loadSuperJackpot();
+      
+      // Обновляем супер джекпот каждые 30 секунд (как обычный джекпот обновляется)
+      if (superJackpotUpdateInterval) {
+        clearInterval(superJackpotUpdateInterval);
+      }
+      superJackpotUpdateInterval = setInterval(() => {
+        loadSuperJackpot();
+      }, 30000); // Обновляем каждые 30 секунд
         } else {
       const amountErr = 'Failed to load jackpot';
       const timerErr = 'Time Left: --:--:--';
@@ -913,14 +925,43 @@ async function loadCashback() {
 }
 
 async function loadSuperJackpot() {
+  console.log('=== loadSuperJackpot() function called ===');
   try {
     const res = await fetch('/api/super-jackpot');
     const data = await res.json();
+    console.log('Super jackpot data:', data);
     
     if (data && data.success) {
-      const amountText = `${data.superJackpot} $TIRED`;
+      // API возвращает amount, а не superJackpot
+      const amount = data.amount || 0;
+      const amountText = `${parseFloat(amount).toFixed(2)} $TIRED`;
+      console.log('Super jackpot amount text:', amountText);
       
-      // Update all super jackpot amount elements
+      // Update all super jackpot amount elements (как у обычного джекпота)
+      const amountEls = [
+        document.getElementById('superj-amount'),           // home
+        document.getElementById('superj-amount-shop'),      // shop
+        document.getElementById('superj-amount-cards'),      // cards
+        document.getElementById('superj-amount-battle'),     // battle
+        document.getElementById('superj-amount-ref'),        // referral
+        document.getElementById('superj-amount-rules')       // rules
+      ];
+      
+      amountEls.forEach(el => {
+        if (el) {
+          el.textContent = amountText;
+          console.log('Updated super jackpot element:', el.id, 'with:', amountText);
+        }
+      });
+      
+      // Если ни один элемент не найден, выводим предупреждение
+      const foundElements = amountEls.filter(el => el !== null);
+      if (foundElements.length === 0) {
+        console.warn('No super jackpot elements found on current page');
+      }
+    } else {
+      console.error('Super jackpot API returned error:', data);
+      // Устанавливаем значение по умолчанию при ошибке
       const amountEls = [
         document.getElementById('superj-amount'),
         document.getElementById('superj-amount-shop'),
@@ -929,13 +970,24 @@ async function loadSuperJackpot() {
         document.getElementById('superj-amount-ref'),
         document.getElementById('superj-amount-rules')
       ];
-      
       amountEls.forEach(el => {
-        if (el) el.textContent = amountText;
+        if (el) el.textContent = '0.00 $TIRED';
       });
     }
   } catch (e) {
     console.error('Load super jackpot error:', e);
+    // Устанавливаем значение по умолчанию при ошибке
+    const amountEls = [
+      document.getElementById('superj-amount'),
+      document.getElementById('superj-amount-shop'),
+      document.getElementById('superj-amount-cards'),
+      document.getElementById('superj-amount-battle'),
+      document.getElementById('superj-amount-ref'),
+      document.getElementById('superj-amount-rules')
+    ];
+    amountEls.forEach(el => {
+      if (el) el.textContent = '0.00 $TIRED';
+    });
   }
 }
 
@@ -1223,6 +1275,14 @@ async function purchaseChest(idChest, chestsCache) {
       closeModal();
       
       if (resp.success) {
+        // Обновляем джекпоты после успешной покупки
+        if (typeof loadJackpot === 'function') {
+          loadJackpot();
+        }
+        if (typeof loadSuperJackpot === 'function') {
+          loadSuperJackpot();
+        }
+        
         if (quantity === 1) {
           showPurchaseModal(Number(idChest));
         } else {
@@ -1758,7 +1818,15 @@ async function openPurchasedPack(idChest){
             <button class="btn btn-primary" id="pm-ok">OK</button>
           </div>
         `;
-        document.getElementById('pm-ok')?.addEventListener('click', () => { closeModal(); loadMyPacks(currentWallet); loadUserCards(currentWallet); loadCashback(); });
+        document.getElementById('pm-ok')?.addEventListener('click', () => { 
+          closeModal(); 
+          loadMyPacks(currentWallet); 
+          loadUserCards(currentWallet); 
+          loadCashback(); 
+          // Обновляем джекпоты после открытия пака (может быть выигран супер джекпот)
+          if (typeof loadJackpot === 'function') loadJackpot();
+          if (typeof loadSuperJackpot === 'function') loadSuperJackpot();
+        });
       }
     } else {
       showMessage(r?.error || 'Failed to open pack');

@@ -748,3 +748,126 @@ def draw_jackpot(cursor, conn):
     
     return drawn_rounds
 
+
+def get_or_create_active_super_jackpot_round(cursor, conn) -> dict:
+    """Получает или создает активный раунд супер джекпота"""
+    from datetime import datetime, timedelta
+    
+    # Проверяем активный раунд (последний, который еще не завершен)
+    cursor.execute("""
+        SELECT * FROM Super_jackpot_rounds 
+        WHERE winner_user_id IS NULL
+        ORDER BY id_round DESC 
+        LIMIT 1
+    """)
+    active_round = cursor.fetchone()
+    
+    if active_round:
+        return active_round
+    
+    # Создаем новый раунд (без даты окончания, так как он завершается при выигрыше)
+    now = datetime.now()
+    # Устанавливаем ends_at далеко в будущем, так как раунд завершается при выигрыше
+    ends_at = now + timedelta(days=365)
+    cursor.execute("""
+        INSERT INTO Super_jackpot_rounds (started_at, ends_at, total_amount)
+        VALUES (%s, %s, 0)
+        RETURNING *
+    """, (now, ends_at))
+    new_round = cursor.fetchone()
+    conn.commit()
+    return new_round
+
+
+def add_to_super_jackpot(cursor, conn, amount: float):
+    """Добавляет сумму в супер джекпот (5% от стоимости пака)"""
+    round_data = get_or_create_active_super_jackpot_round(cursor, conn)
+    round_id = round_data['id_round']
+    
+    cursor.execute("""
+        UPDATE Super_jackpot_rounds
+        SET total_amount = total_amount + %s
+        WHERE id_round = %s
+    """, (amount, round_id))
+    conn.commit()
+
+
+def check_user_has_all_cards(cursor, user_id: int) -> bool:
+    """Проверяет, собрал ли пользователь все уникальные карты (с image_key)"""
+    # Получаем общее количество уникальных карт с image_key
+    cursor.execute("""
+        SELECT COUNT(DISTINCT id_card) as total_cards
+        FROM Cards
+        WHERE image_key IS NOT NULL AND image_key != ''
+    """)
+    total_cards_result = cursor.fetchone()
+    total_cards = total_cards_result['total_cards'] if total_cards_result else 0
+    
+    if total_cards == 0:
+        return False
+    
+    # Получаем количество уникальных карт у пользователя (с image_key)
+    cursor.execute("""
+        SELECT COUNT(DISTINCT cu.id_card) as user_cards
+        FROM Card_User cu
+        JOIN Cards c ON cu.id_card = c.id_card
+        WHERE cu.id_user = %s
+        AND c.image_key IS NOT NULL 
+        AND c.image_key != ''
+    """, (user_id,))
+    user_cards_result = cursor.fetchone()
+    user_cards = user_cards_result['user_cards'] if user_cards_result else 0
+    
+    return user_cards >= total_cards
+
+
+def check_user_already_won_super_jackpot(cursor, user_id: int) -> bool:
+    """Проверяет, выигрывал ли пользователь уже супер джекпот"""
+    cursor.execute("""
+        SELECT COUNT(*) as cnt
+        FROM Super_jackpot_rounds
+        WHERE winner_user_id = %s
+    """, (user_id,))
+    result = cursor.fetchone()
+    return result['cnt'] > 0 if result and result['cnt'] else False
+
+
+def claim_super_jackpot(cursor, conn, user_id: int) -> dict:
+    """Записывает победителя супер джекпота, если пользователь собрал все карты и еще не выигрывал"""
+    from datetime import datetime
+    
+    # Проверяем, не выигрывал ли уже
+    if check_user_already_won_super_jackpot(cursor, user_id):
+        return {"won": False, "reason": "already_won"}
+    
+    # Проверяем, собрал ли все карты
+    if not check_user_has_all_cards(cursor, user_id):
+        return {"won": False, "reason": "not_all_cards"}
+    
+    # Получаем активный раунд
+    round_data = get_or_create_active_super_jackpot_round(cursor, conn)
+    round_id = round_data['id_round']
+    
+    # Проверяем, не выигран ли уже этот раунд
+    if round_data['winner_user_id'] is not None:
+        return {"won": False, "reason": "round_already_won"}
+    
+    # Записываем победителя
+    total_amount = float(round_data['total_amount']) if round_data['total_amount'] else 0.0
+    now = datetime.now()
+    
+    cursor.execute("""
+        UPDATE Super_jackpot_rounds
+        SET winner_user_id = %s,
+            prize = %s,
+            ends_at = %s
+        WHERE id_round = %s
+    """, (user_id, total_amount, now, round_id))
+    conn.commit()
+    
+    return {
+        "won": True,
+        "round_id": round_id,
+        "prize": total_amount
+    }
+

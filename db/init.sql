@@ -94,3 +94,12 @@ create table if not exists Card_trades(
     rarity text not null check (rarity in ('basic', 'rare', 'epic')),
     created_at timestamp default now()
 );
+
+create table if not exists Super_jackpot_rounds(
+    id_round serial primary key,
+    started_at timestamp default now(),
+    ends_at timestamp not null,
+    winner_user_id bigint null references Users(id_user),
+    prize numeric(20,8) null,
+    total_amount numeric(20,8) default 0 not null
+);

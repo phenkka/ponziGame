@@ -38,6 +38,12 @@ function initShopPage() {
                     } else {
                         console.error('loadJackpot function not found');
                     }
+                    console.log('Calling loadSuperJackpot...');
+                    if (typeof loadSuperJackpot === 'function') {
+                        loadSuperJackpot();
+                    } else {
+                        console.error('loadSuperJackpot function not found');
+                    }
                 }, 100);
             }
         }).catch(e => console.error('Error loading user data:', e));
@@ -63,6 +69,7 @@ function initBattlePage() {
             if (d && d.success) {
                 showUserInfo(storedWallet, d.user.ref_code, { redirect: false });
                 loadJackpot(); // Load jackpot info
+                loadSuperJackpot(); // Load super jackpot info
             }
         }).catch(e => console.error('Error loading user data:', e));
     } else {
@@ -89,6 +96,7 @@ function initCardsPage() {
                 loadUserCards(storedWallet); // Load user cards
                 loadMyPacks(storedWallet); // Load user packs
                 loadJackpot(); // Load jackpot info
+                loadSuperJackpot(); // Load super jackpot info
             }
         }).catch(e => console.error('Error loading user data:', e));
     } else {
@@ -114,6 +122,7 @@ function initProfilePage() {
                 showUserInfo(storedWallet, d.user.ref_code, { redirect: false });
                 loadReferral(); // Load profile data
                 loadJackpot(); // Load jackpot info
+                loadSuperJackpot(); // Load super jackpot info
                 // loadCashback() will be called from main.js when needed
             }
         }).catch(e => console.error('Error loading user data:', e));
@@ -139,6 +148,7 @@ function initRulesPage() {
             if (d && d.success) {
                 showUserInfo(storedWallet, d.user.ref_code, { redirect: false });
                 loadJackpot(); // Load jackpot info
+                loadSuperJackpot(); // Load super jackpot info
             }
         }).catch(e => console.error('Error loading user data:', e));
     } else {

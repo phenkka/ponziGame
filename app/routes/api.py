@@ -5,7 +5,7 @@ import hashlib
 import json
 
 from core.models import AuthRequest
-from core.utils import get_db_connection, generate_ref_code, verify_solana_signature, verify_solana_transaction, HELIUS_RPC_URL, determine_card_rarity, get_random_card_by_rarity, get_or_create_active_round, add_to_jackpot, draw_jackpot
+from core.utils import get_db_connection, generate_ref_code, verify_solana_signature, verify_solana_transaction, HELIUS_RPC_URL, determine_card_rarity, get_random_card_by_rarity, get_or_create_active_round, add_to_jackpot, draw_jackpot, add_to_super_jackpot, claim_super_jackpot, get_or_create_active_super_jackpot_round
 from core.auth import verify_auth
 from pydantic import BaseModel
 
@@ -580,10 +580,45 @@ def setup_api_routes(app):
     
     @app.get("/api/super-jackpot")
     async def get_super_jackpot():
-        return {
-            "success": True,
-            "amount": 0
-        }
+        """Получить информацию о текущем супер джекпоте"""
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            round_data = get_or_create_active_super_jackpot_round(cursor, conn)
+            
+            # Проверяем, есть ли уже победитель
+            winner_info = None
+            if round_data['winner_user_id']:
+                cursor.execute("""
+                    SELECT id_user, wallet
+                    FROM Users
+                    WHERE id_user = %s
+                """, (round_data['winner_user_id'],))
+                winner = cursor.fetchone()
+                if winner:
+                    winner_info = {
+                        "wallet": winner['wallet']
+                    }
+            
+            cursor.close()
+            conn.close()
+            
+            return {
+                "success": True,
+                "amount": float(round_data['total_amount']) if round_data['total_amount'] else 0.0,
+                "winner": winner_info,
+                "round_id": round_data['id_round']
+            }
+        except Exception as e:
+            print(f"Get super jackpot error: {e}")
+            import traceback
+            traceback.print_exc()
+            return {
+                "success": False,
+                "error": str(e),
+                "amount": 0
+            }
     
     @app.post("/api/cards/trade")
     async def trade_cards(request: Request):
@@ -948,6 +983,10 @@ def setup_api_routes(app):
             jackpot_contribution = total_price * 0.1
             add_to_jackpot(cursor, conn, jackpot_contribution)
             
+            # Добавляем 5% от общей суммы в супер джекпот
+            super_jackpot_contribution = total_price * 0.05
+            add_to_super_jackpot(cursor, conn, super_jackpot_contribution)
+            
             conn.commit()
             
             cursor.close()
@@ -1125,11 +1164,12 @@ def setup_api_routes(app):
                 VALUES (%s, %s, %s)
             """, (id_purchase, purchase_data['id_user'], purchase_data['id_chest']))
             
-            conn.commit()
-            cursor.close()
-            conn.close()
+            # Проверяем супер джекпот: собрал ли пользователь все карты?
+            super_jackpot_result = claim_super_jackpot(cursor, conn, purchase_data['id_user'])
             
-            return {
+            conn.commit()
+            
+            response_data = {
                 "success": True,
                 "lost": False,
                 "rarity": rarity,
@@ -1138,6 +1178,18 @@ def setup_api_routes(app):
                 "image_url": card.get('image_url', ''),
                 "start_bounty": card['start_bounty']
             }
+            
+            # Если выиграл супер джекпот, добавляем информацию в ответ
+            if super_jackpot_result.get("won"):
+                response_data["super_jackpot"] = {
+                    "won": True,
+                    "prize": float(super_jackpot_result["prize"])
+                }
+            
+            cursor.close()
+            conn.close()
+            
+            return response_data
             
         except Exception as e:
             print(f"Open chest error: {e}")
