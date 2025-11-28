@@ -594,6 +594,21 @@ def setup_api_routes(app):
             wallet = body.get("wallet")
             id_chest = body.get("id_chest")
             tx_signature = body.get("txSignature")
+            quantity = body.get("quantity", 1)  # По умолчанию 1 пак
+            
+            # Валидация количества
+            try:
+                quantity = int(quantity)
+                if quantity < 1 or quantity > 100:
+                    return JSONResponse(
+                        status_code=400,
+                        content={"success": False, "error": "Quantity must be between 1 and 100"}
+                    )
+            except (ValueError, TypeError):
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "error": "Invalid quantity"}
+                )
             
             if not wallet or not id_chest or not tx_signature:
                 return JSONResponse(
@@ -684,11 +699,13 @@ def setup_api_routes(app):
             
             # Верифицируем транзакцию на блокчейне через Helius RPC
             price = float(chest['price'])
+            total_price = price * quantity  # Общая сумма за все паки
+            
             tx_verification = verify_solana_transaction(
                 tx_signature=tx_signature,
                 expected_sender=wallet,
                 expected_receiver=merchant,
-                expected_amount=price,
+                expected_amount=total_price,  # Проверяем общую сумму
                 rpc_url=HELIUS_RPC_URL,  # Используем Helius RPC
                 mint_address=mint if mint else None
             )
@@ -704,17 +721,25 @@ def setup_api_routes(app):
                     }
                 )
             
-            # Создаем запись о покупке
-            cursor.execute("""
-                INSERT INTO Chest_purchases (id_user, id_chest, tx_signature)
-                VALUES (%s, %s, %s)
-                RETURNING id_purchase
-            """, (user['id_user'], id_chest, tx_signature))
+            # Создаем записи о покупке для каждого пака
+            purchase_ids = []
+            for i in range(quantity):
+                # Для нескольких паков используем уникальный tx_signature с индексом
+                # Это позволяет отслеживать каждую покупку отдельно
+                unique_tx_sig = f"{tx_signature}_{i}" if quantity > 1 else tx_signature
+                
+                cursor.execute("""
+                    INSERT INTO Chest_purchases (id_user, id_chest, tx_signature)
+                    VALUES (%s, %s, %s)
+                    RETURNING id_purchase
+                """, (user['id_user'], id_chest, unique_tx_sig))
+                
+                purchase = cursor.fetchone()
+                if purchase:
+                    purchase_ids.append(purchase['id_purchase'])
             
-            purchase = cursor.fetchone()
-            
-            # Добавляем 10% от цены пака в джекпот
-            jackpot_contribution = float(chest['price']) * 0.1
+            # Добавляем 10% от общей суммы в джекпот
+            jackpot_contribution = total_price * 0.1
             add_to_jackpot(cursor, conn, jackpot_contribution)
             
             conn.commit()
@@ -722,11 +747,18 @@ def setup_api_routes(app):
             cursor.close()
             conn.close()
             
-            return {
+            result = {
                 "success": True,
-                "purchase_id": purchase['id_purchase'],
-                "message": "Pack purchased successfully"
+                "purchase_ids": purchase_ids,
+                "quantity": quantity,
+                "message": f"Successfully purchased {quantity} pack{'s' if quantity > 1 else ''}"
             }
+            
+            # Для обратной совместимости: если quantity = 1, добавляем purchase_id
+            if quantity == 1 and len(purchase_ids) > 0:
+                result["purchase_id"] = purchase_ids[0]
+            
+            return result
             
         except Exception as e:
             print(f"Buy chest error: {e}")

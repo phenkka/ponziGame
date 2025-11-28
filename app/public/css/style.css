@@ -348,6 +348,118 @@ body:not(.page-home) .page {
 .pack-price { font-family: 'Roboto Flex', sans-serif; font-weight: 600; font-size: 16px; color: #ddd; }
 .pack-rates { font-family: 'Roboto Flex', sans-serif; font-weight: 300; font-size: 13px; color: #cccccc; line-height: 1.4; margin-top: 8px; }
 .pack-actions { margin-top: 12px; }
+.pack-quantity-selector {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 16px 0;
+  padding: 12px;
+  background: rgba(26, 26, 26, 0.6);
+  border-radius: 12px;
+  border: 1px solid rgba(106, 90, 205, 0.2);
+}
+
+.quantity-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: rgba(0, 0, 0, 0.4);
+  border-radius: 10px;
+  padding: 6px;
+  border: 1px solid rgba(106, 90, 205, 0.3);
+}
+
+.quantity-btn {
+  background: linear-gradient(135deg, rgba(106, 90, 205, 0.3), rgba(106, 90, 205, 0.1));
+  border: 1px solid rgba(106, 90, 205, 0.5);
+  color: #ffffff;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  font-size: 20px;
+  font-weight: 800;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  font-family: 'Roboto Flex', sans-serif;
+  user-select: none;
+  position: relative;
+  overflow: hidden;
+}
+
+.quantity-btn::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0;
+  height: 0;
+  border-radius: 50%;
+  background: rgba(106, 90, 205, 0.4);
+  transform: translate(-50%, -50%);
+  transition: width 0.3s, height 0.3s;
+}
+
+.quantity-btn:hover {
+  background: linear-gradient(135deg, rgba(106, 90, 205, 0.5), rgba(106, 90, 205, 0.3));
+  border-color: #6A5ACD;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(106, 90, 205, 0.3);
+}
+
+.quantity-btn:hover::before {
+  width: 100px;
+  height: 100px;
+}
+
+.quantity-btn:active {
+  transform: translateY(0) scale(0.95);
+  box-shadow: 0 2px 6px rgba(106, 90, 205, 0.2);
+}
+
+.quantity-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.quantity-input {
+  background: transparent;
+  border: none;
+  color: #ffffff;
+  text-align: center;
+  font-size: 18px;
+  font-weight: 800;
+  width: 60px;
+  font-family: 'Roboto Flex', sans-serif;
+  pointer-events: none;
+  -moz-appearance: textfield;
+  outline: none;
+}
+
+.quantity-input::-webkit-outer-spin-button,
+.quantity-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.quantity-total {
+  text-align: center;
+  font-size: 16px;
+  color: #6A5ACD;
+  font-weight: 700;
+  font-family: 'Roboto Flex', sans-serif;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 8px;
+  background: rgba(106, 90, 205, 0.1);
+  border-radius: 8px;
+  border: 1px solid rgba(106, 90, 205, 0.2);
+}
+
 .pack-buy-btn { background: #6A5ACD; border: none; color: #ffffff; padding: 10px 16px; border-radius: 12px; font-family: 'Roboto Flex', sans-serif; font-weight: 700; cursor: pointer; width: 100%; }
 .pack-buy-btn:hover { background: #5A4ABD; }
 .pack-buy-btn:disabled { opacity: 0.6; cursor: not-allowed; }
@@ -727,6 +839,33 @@ body:not(.page-home) .page {
     
     .pack-rates {
         font-size: 11px;
+    }
+    
+    .pack-quantity-selector {
+        margin: 12px 0;
+        padding: 10px;
+        gap: 10px;
+    }
+    
+    .quantity-controls {
+        gap: 10px;
+        padding: 5px;
+    }
+    
+    .quantity-btn {
+        width: 32px;
+        height: 32px;
+        font-size: 18px;
+    }
+    
+    .quantity-input {
+        width: 50px;
+        font-size: 16px;
+    }
+    
+    .quantity-total {
+        font-size: 14px;
+        padding: 6px;
     }
 }
 
@@ -2711,6 +2850,78 @@ body:not(.page-home) .last-jackpot-section .winner-wallet { font-size: 16px; }
     font-family: 'Inter', sans-serif;
     font-size: 16px;
     opacity: 0.8;
+}
+
+/* Purchase Loading Modal */
+.purchase-loading-modal {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 24px;
+    padding: 20px;
+    text-align: center;
+}
+
+.purchase-loading-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+    min-height: 200px;
+    justify-content: center;
+}
+
+.purchase-spinner {
+    width: 80px;
+    height: 80px;
+    border: 5px solid rgba(106, 90, 205, 0.2);
+    border-top: 5px solid #6A5ACD;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin-bottom: 8px;
+}
+
+.purchase-status-text {
+    font-family: 'Roboto Flex', sans-serif;
+    font-weight: 800;
+    font-size: 22px;
+    color: #ffffff;
+    margin-top: 12px;
+}
+
+.purchase-status-subtitle {
+    font-family: 'Inter', sans-serif;
+    font-size: 14px;
+    color: #cccccc;
+    opacity: 0.8;
+    margin-top: 4px;
+}
+
+.purchase-info {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 16px;
+    padding: 16px;
+    background: rgba(106, 90, 205, 0.1);
+    border-radius: 12px;
+    border: 1px solid rgba(106, 90, 205, 0.2);
+    width: 100%;
+}
+
+.purchase-quantity {
+    font-family: 'Roboto Flex', sans-serif;
+    font-weight: 700;
+    font-size: 16px;
+    color: #6A5ACD;
+}
+
+.purchase-note {
+    font-family: 'Inter', sans-serif;
+    font-size: 12px;
+    color: #999999;
+    font-style: italic;
+    margin-top: 4px;
 }
 
 /* Nostalgia Section */

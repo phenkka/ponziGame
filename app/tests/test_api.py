@@ -685,8 +685,11 @@ class TestChestPurchaseAPI:
             assert response.status_code == 200, f"Expected 200, got {response.status_code}. Response: {response.json()}"
             data = response.json()
             assert data["success"] is True
-            assert "purchase_id" in data
+            # Проверяем обратную совместимость: при quantity=1 (по умолчанию) должен быть purchase_id
+            assert "purchase_id" in data or "purchase_ids" in data
             assert "message" in data
+            # Проверяем, что quantity по умолчанию = 1
+            assert data.get("quantity", 1) == 1
             
             # Проверяем, что покупка создана в БД
             cursor = db_connection.cursor()
@@ -765,6 +768,490 @@ class TestChestPurchaseAPI:
             data = response.json()
             assert data["success"] is False
             assert "Transaction verification failed" in data["error"]
+
+
+class TestChestPurchaseQuantity:
+    """Тесты для покупки нескольких паков и защиты от обхода оплаты"""
+    
+    @pytest.mark.asyncio
+    @patch('routes.api.verify_solana_transaction')
+    async def test_buy_multiple_chests_success(self, mock_verify_tx, clean_db, db_connection):
+        """Проверяет успешную покупку нескольких паков с правильной суммой"""
+        if db_connection is None:
+            pytest.skip("Database not available")
+        
+        # Создаем пользователя и пак
+        signing_key = SigningKey.generate()
+        verify_key = signing_key.verify_key
+        wallet_address = base58.b58encode(verify_key.encode()).decode('utf-8')
+        
+        cursor = db_connection.cursor()
+        cursor.execute(
+            "INSERT INTO Users (wallet, ref_code) VALUES (%s, %s) RETURNING id_user",
+            (wallet_address, "TESTCODE_QTY")
+        )
+        user_id = cursor.fetchone()[0]
+        
+        cursor.execute("""
+            INSERT INTO Chests (prob_common, prob_rare, prob_epic, prob_legendary, chance_loss, price)
+            VALUES (80, 12, 7, 1, 0, 100)
+            RETURNING id_chest
+        """)
+        chest_id = cursor.fetchone()[0]
+        db_connection.commit()
+        cursor.close()
+        
+        message = "Gamba Auth: 1234567890"
+        signed = signing_key.sign(message.encode('utf-8'))
+        signature_list = list(signed.signature)
+        
+        headers = {
+            "X-Wallet": wallet_address,
+            "X-Signature": json.dumps(signature_list),
+            "X-Message": message
+        }
+        
+        quantity = 5
+        price_per_pack = 100.0
+        total_price = price_per_pack * quantity
+        
+        # Мокируем успешную верификацию транзакции с правильной суммой
+        mock_verify_tx.return_value = {
+            "valid": True,
+            "actual_amount": total_price,
+            "sender": wallet_address
+        }
+        
+        tx_signature = "valid_tx_multiple_123"
+        
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            response = await client.post(
+                "/api/chests/buy",
+                json={
+                    "wallet": wallet_address,
+                    "id_chest": chest_id,
+                    "txSignature": tx_signature,
+                    "quantity": quantity
+                },
+                headers=headers
+            )
+            assert response.status_code == 200
+            data = response.json()
+            assert data["success"] is True
+            assert data["quantity"] == quantity
+            assert len(data["purchase_ids"]) == quantity
+            
+            # Проверяем, что verify_solana_transaction была вызвана с правильной суммой
+            mock_verify_tx.assert_called_once()
+            call_args = mock_verify_tx.call_args
+            assert call_args[1]["expected_amount"] == total_price
+            
+            # Проверяем, что создано правильное количество покупок
+            cursor = db_connection.cursor()
+            cursor.execute("""
+                SELECT COUNT(*) as cnt FROM Chest_purchases 
+                WHERE id_user = %s AND id_chest = %s
+            """, (user_id, chest_id))
+            count = cursor.fetchone()[0]
+            assert count == quantity
+            
+            # Проверяем, что джекпот получил правильную сумму (10% от общей)
+            cursor.execute("""
+                SELECT total_amount FROM Jackpot_rounds WHERE status = 'active'
+                ORDER BY id_round DESC LIMIT 1
+            """)
+            jackpot = cursor.fetchone()
+            if jackpot:
+                expected_jackpot = total_price * 0.1
+                assert float(jackpot[0]) == expected_jackpot, \
+                    f"Expected jackpot contribution {expected_jackpot}, got {jackpot[0]}"
+            
+            cursor.close()
+    
+    @pytest.mark.asyncio
+    @patch('routes.api.verify_solana_transaction')
+    async def test_buy_multiple_chests_wrong_amount(self, mock_verify_tx, clean_db, db_connection):
+        """Проверяет, что нельзя купить много паков за меньшую стоимость"""
+        if db_connection is None:
+            pytest.skip("Database not available")
+        
+        # Создаем пользователя и пак
+        signing_key = SigningKey.generate()
+        verify_key = signing_key.verify_key
+        wallet_address = base58.b58encode(verify_key.encode()).decode('utf-8')
+        
+        cursor = db_connection.cursor()
+        cursor.execute(
+            "INSERT INTO Users (wallet, ref_code) VALUES (%s, %s) RETURNING id_user",
+            (wallet_address, "TESTCODE_WRONG")
+        )
+        user_id = cursor.fetchone()[0]
+        
+        cursor.execute("""
+            INSERT INTO Chests (prob_common, prob_rare, prob_epic, prob_legendary, chance_loss, price)
+            VALUES (80, 12, 7, 1, 0, 100)
+            RETURNING id_chest
+        """)
+        chest_id = cursor.fetchone()[0]
+        db_connection.commit()
+        cursor.close()
+        
+        message = "Gamba Auth: 1234567890"
+        signed = signing_key.sign(message.encode('utf-8'))
+        signature_list = list(signed.signature)
+        
+        headers = {
+            "X-Wallet": wallet_address,
+            "X-Signature": json.dumps(signature_list),
+            "X-Message": message
+        }
+        
+        quantity = 10  # Пытаемся купить 10 паков
+        price_per_pack = 100.0
+        total_price = price_per_pack * quantity  # Должно быть 1000
+        wrong_amount = 100.0  # Но отправляем только 100 (цена за 1 пак)
+        
+        # Мокируем верификацию транзакции - она должна вернуть невалидную транзакцию
+        mock_verify_tx.return_value = {
+            "valid": False,
+            "error": f"Expected amount {total_price}, but got {wrong_amount}",
+            "actual_amount": wrong_amount
+        }
+        
+        tx_signature = "wrong_amount_tx_123"
+        
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            response = await client.post(
+                "/api/chests/buy",
+                json={
+                    "wallet": wallet_address,
+                    "id_chest": chest_id,
+                    "txSignature": tx_signature,
+                    "quantity": quantity
+                },
+                headers=headers
+            )
+            assert response.status_code == 400
+            data = response.json()
+            assert data["success"] is False
+            assert "Transaction verification failed" in data["error"]
+            
+            # Проверяем, что verify_solana_transaction была вызвана с правильной суммой
+            mock_verify_tx.assert_called_once()
+            call_args = mock_verify_tx.call_args
+            assert call_args[1]["expected_amount"] == total_price, \
+                f"Expected verification with amount {total_price}, but got {call_args[1]['expected_amount']}"
+            
+            # Проверяем, что покупки НЕ созданы
+            cursor = db_connection.cursor()
+            cursor.execute("""
+                SELECT COUNT(*) as cnt FROM Chest_purchases 
+                WHERE id_user = %s AND id_chest = %s AND tx_signature LIKE %s
+            """, (user_id, chest_id, f"{tx_signature}%"))
+            count = cursor.fetchone()[0]
+            assert count == 0, "No purchases should be created with wrong amount"
+            cursor.close()
+    
+    @pytest.mark.asyncio
+    async def test_buy_chest_invalid_quantity_too_low(self, clean_db, db_connection):
+        """Проверяет валидацию количества - нельзя купить меньше 1 пака"""
+        if db_connection is None:
+            pytest.skip("Database not available")
+        
+        signing_key = SigningKey.generate()
+        verify_key = signing_key.verify_key
+        wallet_address = base58.b58encode(verify_key.encode()).decode('utf-8')
+        
+        cursor = db_connection.cursor()
+        cursor.execute(
+            "INSERT INTO Users (wallet, ref_code) VALUES (%s, %s)",
+            (wallet_address, "TESTCODE_INVALID")
+        )
+        db_connection.commit()
+        cursor.close()
+        
+        message = "Gamba Auth: 1234567890"
+        signed = signing_key.sign(message.encode('utf-8'))
+        signature_list = list(signed.signature)
+        
+        headers = {
+            "X-Wallet": wallet_address,
+            "X-Signature": json.dumps(signature_list),
+            "X-Message": message
+        }
+        
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            response = await client.post(
+                "/api/chests/buy",
+                json={
+                    "wallet": wallet_address,
+                    "id_chest": 1,
+                    "txSignature": "test_signature",
+                    "quantity": 0  # Невалидное количество
+                },
+                headers=headers
+            )
+            assert response.status_code == 400
+            data = response.json()
+            assert data["success"] is False
+            assert "Quantity must be between 1 and 100" in data["error"]
+    
+    @pytest.mark.asyncio
+    async def test_buy_chest_invalid_quantity_too_high(self, clean_db, db_connection):
+        """Проверяет валидацию количества - нельзя купить больше 100 паков"""
+        if db_connection is None:
+            pytest.skip("Database not available")
+        
+        signing_key = SigningKey.generate()
+        verify_key = signing_key.verify_key
+        wallet_address = base58.b58encode(verify_key.encode()).decode('utf-8')
+        
+        cursor = db_connection.cursor()
+        cursor.execute(
+            "INSERT INTO Users (wallet, ref_code) VALUES (%s, %s)",
+            (wallet_address, "TESTCODE_INVALID_HIGH")
+        )
+        db_connection.commit()
+        cursor.close()
+        
+        message = "Gamba Auth: 1234567890"
+        signed = signing_key.sign(message.encode('utf-8'))
+        signature_list = list(signed.signature)
+        
+        headers = {
+            "X-Wallet": wallet_address,
+            "X-Signature": json.dumps(signature_list),
+            "X-Message": message
+        }
+        
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            response = await client.post(
+                "/api/chests/buy",
+                json={
+                    "wallet": wallet_address,
+                    "id_chest": 1,
+                    "txSignature": "test_signature",
+                    "quantity": 101  # Невалидное количество
+                },
+                headers=headers
+            )
+            assert response.status_code == 400
+            data = response.json()
+            assert data["success"] is False
+            assert "Quantity must be between 1 and 100" in data["error"]
+    
+    @pytest.mark.asyncio
+    async def test_buy_chest_invalid_quantity_type(self, clean_db, db_connection):
+        """Проверяет валидацию типа количества"""
+        if db_connection is None:
+            pytest.skip("Database not available")
+        
+        signing_key = SigningKey.generate()
+        verify_key = signing_key.verify_key
+        wallet_address = base58.b58encode(verify_key.encode()).decode('utf-8')
+        
+        cursor = db_connection.cursor()
+        cursor.execute(
+            "INSERT INTO Users (wallet, ref_code) VALUES (%s, %s)",
+            (wallet_address, "TESTCODE_INVALID_TYPE")
+        )
+        db_connection.commit()
+        cursor.close()
+        
+        message = "Gamba Auth: 1234567890"
+        signed = signing_key.sign(message.encode('utf-8'))
+        signature_list = list(signed.signature)
+        
+        headers = {
+            "X-Wallet": wallet_address,
+            "X-Signature": json.dumps(signature_list),
+            "X-Message": message
+        }
+        
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            response = await client.post(
+                "/api/chests/buy",
+                json={
+                    "wallet": wallet_address,
+                    "id_chest": 1,
+                    "txSignature": "test_signature",
+                    "quantity": "not_a_number"  # Невалидный тип
+                },
+                headers=headers
+            )
+            assert response.status_code == 400
+            data = response.json()
+            assert data["success"] is False
+            assert "Invalid quantity" in data["error"]
+    
+    @pytest.mark.asyncio
+    @patch('routes.api.verify_solana_transaction')
+    async def test_buy_chest_default_quantity(self, mock_verify_tx, clean_db, db_connection):
+        """Проверяет, что при отсутствии quantity используется значение по умолчанию (1)"""
+        if db_connection is None:
+            pytest.skip("Database not available")
+        
+        # Мокируем успешную верификацию транзакции
+        mock_verify_tx.return_value = {
+            "valid": True,
+            "actual_amount": 100.0,
+            "sender": "test_wallet"
+        }
+        
+        signing_key = SigningKey.generate()
+        verify_key = signing_key.verify_key
+        wallet_address = base58.b58encode(verify_key.encode()).decode('utf-8')
+        
+        cursor = db_connection.cursor()
+        cursor.execute(
+            "INSERT INTO Users (wallet, ref_code) VALUES (%s, %s) RETURNING id_user",
+            (wallet_address, "TESTCODE_DEFAULT")
+        )
+        user_id = cursor.fetchone()[0]
+        
+        cursor.execute("""
+            INSERT INTO Chests (prob_common, prob_rare, prob_epic, prob_legendary, chance_loss, price)
+            VALUES (80, 12, 7, 1, 0, 100)
+            RETURNING id_chest
+        """)
+        chest_id = cursor.fetchone()[0]
+        db_connection.commit()
+        cursor.close()
+        
+        message = "Gamba Auth: 1234567890"
+        signed = signing_key.sign(message.encode('utf-8'))
+        signature_list = list(signed.signature)
+        
+        headers = {
+            "X-Wallet": wallet_address,
+            "X-Signature": json.dumps(signature_list),
+            "X-Message": message
+        }
+        
+        tx_signature = "default_quantity_tx_123"
+        
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            # Не указываем quantity - должно использоваться значение по умолчанию (1)
+            response = await client.post(
+                "/api/chests/buy",
+                json={
+                    "wallet": wallet_address,
+                    "id_chest": chest_id,
+                    "txSignature": tx_signature
+                },
+                headers=headers
+            )
+            assert response.status_code == 200
+            data = response.json()
+            assert data["success"] is True
+            # Проверяем, что quantity по умолчанию = 1
+            assert data.get("quantity", 1) == 1
+            assert len(data["purchase_ids"]) == 1
+            
+            # Проверяем, что verify_solana_transaction была вызвана с суммой за 1 пак
+            mock_verify_tx.assert_called_once()
+            call_args = mock_verify_tx.call_args
+            assert call_args[1]["expected_amount"] == 100.0
+            
+            # Проверяем, что создана только одна покупка
+            cursor = db_connection.cursor()
+            cursor.execute("""
+                SELECT COUNT(*) as cnt FROM Chest_purchases 
+                WHERE id_user = %s AND id_chest = %s AND tx_signature = %s
+            """, (user_id, chest_id, tx_signature))
+            count = cursor.fetchone()[0]
+            assert count == 1
+            cursor.close()
+    
+    @pytest.mark.asyncio
+    @patch('routes.api.verify_solana_transaction')
+    async def test_buy_chest_jackpot_contribution_multiple(self, mock_verify_tx, clean_db, db_connection):
+        """Проверяет, что джекпот получает правильную сумму при покупке нескольких паков"""
+        if db_connection is None:
+            pytest.skip("Database not available")
+        
+        # Создаем пользователя и пак
+        signing_key = SigningKey.generate()
+        verify_key = signing_key.verify_key
+        wallet_address = base58.b58encode(verify_key.encode()).decode('utf-8')
+        
+        cursor = db_connection.cursor()
+        cursor.execute(
+            "INSERT INTO Users (wallet, ref_code) VALUES (%s, %s) RETURNING id_user",
+            (wallet_address, "TESTCODE_JACKPOT")
+        )
+        user_id = cursor.fetchone()[0]
+        
+        cursor.execute("""
+            INSERT INTO Chests (prob_common, prob_rare, prob_epic, prob_legendary, chance_loss, price)
+            VALUES (80, 12, 7, 1, 0, 250)
+            RETURNING id_chest
+        """)
+        chest_id = cursor.fetchone()[0]
+        db_connection.commit()
+        cursor.close()
+        
+        message = "Gamba Auth: 1234567890"
+        signed = signing_key.sign(message.encode('utf-8'))
+        signature_list = list(signed.signature)
+        
+        headers = {
+            "X-Wallet": wallet_address,
+            "X-Signature": json.dumps(signature_list),
+            "X-Message": message
+        }
+        
+        quantity = 4
+        price_per_pack = 250.0
+        total_price = price_per_pack * quantity  # 1000
+        expected_jackpot_contribution = total_price * 0.1  # 100
+        
+        # Мокируем успешную верификацию транзакции
+        mock_verify_tx.return_value = {
+            "valid": True,
+            "actual_amount": total_price,
+            "sender": wallet_address
+        }
+        
+        tx_signature = "jackpot_test_tx_123"
+        
+        # Получаем начальную сумму джекпота
+        cursor = db_connection.cursor()
+        cursor.execute("""
+            SELECT COALESCE(total_amount, 0) as total FROM Jackpot_rounds 
+            WHERE status = 'active' ORDER BY id_round DESC LIMIT 1
+        """)
+        initial_jackpot = cursor.fetchone()[0] if cursor.rowcount > 0 else 0.0
+        cursor.close()
+        
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            response = await client.post(
+                "/api/chests/buy",
+                json={
+                    "wallet": wallet_address,
+                    "id_chest": chest_id,
+                    "txSignature": tx_signature,
+                    "quantity": quantity
+                },
+                headers=headers
+            )
+            assert response.status_code == 200
+            data = response.json()
+            assert data["success"] is True
+            
+            # Проверяем, что джекпот получил правильную сумму
+            cursor = db_connection.cursor()
+            cursor.execute("""
+                SELECT total_amount FROM Jackpot_rounds 
+                WHERE status = 'active' ORDER BY id_round DESC LIMIT 1
+            """)
+            final_jackpot = cursor.fetchone()[0]
+            jackpot_increase = float(final_jackpot) - float(initial_jackpot)
+            
+            assert abs(jackpot_increase - expected_jackpot_contribution) < 0.01, \
+                f"Expected jackpot increase {expected_jackpot_contribution}, got {jackpot_increase}"
+            
+            cursor.close()
     
     @pytest.mark.asyncio
     async def test_buy_chest_wrong_wallet(self, clean_db, db_connection):
@@ -886,5 +1373,8 @@ class TestChestPurchaseAPI:
             assert response.status_code == 200, f"Expected 200, got {response.status_code}. Response: {response.json()}"
             data = response.json()
             assert data["success"] is True
-            assert "purchase_id" in data
+            # Проверяем обратную совместимость: при quantity=1 (по умолчанию) должен быть purchase_id
+            assert "purchase_id" in data or "purchase_ids" in data
+            # Проверяем, что quantity по умолчанию = 1
+            assert data.get("quantity", 1) == 1
 

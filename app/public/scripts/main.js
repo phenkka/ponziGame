@@ -999,6 +999,14 @@ async function loadPacks(forShop = false) {
           <div class="pack-name">${getPackLabel(chest.id_chest)}</div>
           <div class="pack-price">PRICE: ${Number(chest.price).toString()} $TIRED</div>
           <div class="pack-rates">CARD DROP RATES: Common: ${chest.prob_common}%; Rare: ${chest.prob_rare}%; Epic: ${chest.prob_epic}%; Legendary: ${chest.prob_legendary}%${chest.chance_loss > 0 ? `; Loss: ${chest.chance_loss}%` : ''}</div>
+          <div class="pack-quantity-selector">
+            <div class="quantity-controls">
+              <button class="quantity-btn quantity-minus" data-id="${chest.id_chest}" aria-label="Decrease quantity">−</button>
+              <input type="number" class="quantity-input" data-id="${chest.id_chest}" value="1" min="1" max="100" readonly>
+              <button class="quantity-btn quantity-plus" data-id="${chest.id_chest}" aria-label="Increase quantity">+</button>
+            </div>
+            <div class="quantity-total" data-id="${chest.id_chest}">Total: ${Number(chest.price).toString()} $TIRED</div>
+          </div>
           <button class="pack-buy-btn" data-id="${chest.id_chest}">${currentWallet ? 'Buy' : 'Connect Phantom wallet'}</button>
         </div>
       `;
@@ -1006,6 +1014,44 @@ async function loadPacks(forShop = false) {
     });
     // Removed price increase info block on shop page per request
     container.querySelectorAll('.pack-buy-btn').forEach(btn => btn.addEventListener('click', async () => { if (!currentWallet) { await connectWallet(); return; } const id = btn.getAttribute('data-id'); await purchaseChest(id, data.chests); }));
+    
+    // Добавляем обработчики для кнопок количества
+    container.querySelectorAll('.quantity-plus').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const id = btn.getAttribute('data-id');
+        const input = container.querySelector(`.quantity-input[data-id="${id}"]`);
+        const chest = data.chests.find(c => c.id_chest === Number(id));
+        if (input && chest) {
+          const current = parseInt(input.value) || 1;
+          const max = 100;
+          if (current < max) {
+            input.value = current + 1;
+            updateQuantityTotal(id, chest.price, container);
+          }
+        }
+      });
+    });
+    
+    container.querySelectorAll('.quantity-minus').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const id = btn.getAttribute('data-id');
+        const input = container.querySelector(`.quantity-input[data-id="${id}"]`);
+        const chest = data.chests.find(c => c.id_chest === Number(id));
+        if (input && chest) {
+          const current = parseInt(input.value) || 1;
+          if (current > 1) {
+            input.value = current - 1;
+            updateQuantityTotal(id, chest.price, container);
+          }
+        }
+      });
+    });
+    
+    // Инициализируем total для всех паков
+    data.chests.forEach(chest => {
+      updateQuantityTotal(chest.id_chest, chest.price, container);
+    });
+    
     updatePackButtons();
     // Снимаем флаг загрузки
     container.dataset.loading = 'false';
@@ -1019,6 +1065,16 @@ async function loadPacks(forShop = false) {
 function updatePackButtons() {
   const packButtons = document.querySelectorAll('.pack-buy-btn');
   packButtons.forEach(btn => { btn.textContent = currentWallet ? 'Buy' : 'Connect Phantom wallet'; });
+}
+
+function updateQuantityTotal(id, price, container) {
+  const input = container.querySelector(`.quantity-input[data-id="${id}"]`);
+  const totalEl = container.querySelector(`.quantity-total[data-id="${id}"]`);
+  if (input && totalEl) {
+    const quantity = parseInt(input.value) || 1;
+    const total = (Number(price) * quantity).toFixed(2);
+    totalEl.textContent = `Total: ${total} $TIRED`;
+  }
 }
 
 async function connectWallet() {
@@ -1035,18 +1091,35 @@ async function connectWallet() {
 
 async function purchaseChest(idChest, chestsCache) {
   if (!currentWallet) { showMessage('Please connect your Phantom wallet first'); return; }
-  const ok = confirm('Buy this pack?');
+  
+  // Получаем количество паков из input
+  const quantityInput = document.querySelector(`.quantity-input[data-id="${idChest}"]`);
+  const quantity = quantityInput ? parseInt(quantityInput.value) || 1 : 1;
+  
+  if (quantity < 1 || quantity > 100) {
+    showMessage('Invalid quantity. Please select between 1 and 100 packs.');
+    return;
+  }
+  
+  const packText = quantity === 1 ? 'pack' : 'packs';
+  const ok = confirm(`Buy ${quantity} ${packText}?`);
   if (!ok) return;
+  
+  // Показываем модальное окно загрузки сразу после подтверждения
+  showPurchaseLoadingModal(quantity, idChest);
+  
   try {
+    updatePurchaseLoadingStatus('preparing', 'Preparing transaction...');
     const cfgResp = await fetch('/api/config');
     const cfg = await cfgResp.json();
-    if (!cfg || !cfg.success) { showMessage('Failed to fetch config'); return; }
+    if (!cfg || !cfg.success) { closeModal(); showMessage('Failed to fetch config'); return; }
     const provider = window.phantom?.solana || window.solana;
-    if (!provider) { showMessage('Phantom not found'); return; }
-    try { await provider.connect(); } catch (e) { showMessage('Phantom connection rejected'); return; }
+    if (!provider) { closeModal(); showMessage('Phantom not found'); return; }
+    try { await provider.connect(); } catch (e) { closeModal(); showMessage('Phantom connection rejected'); return; }
+    updatePurchaseLoadingStatus('signing', 'Please sign the transaction in Phantom...');
     const purchaseMsg = `Gamba Purchase Verify\nwallet=${currentWallet}\nchest=${idChest}\nnonce=${Date.now()}`;
-    try { const enc = new TextEncoder().encode(purchaseMsg); const signed = await provider.signMessage(enc, 'utf8'); void Array.from(signed.signature); } catch { showMessage('Signature was rejected in Phantom'); return; }
-    if (!window.Web3Lib || !window.SPLLite) { showMessage('Initialization error, please reload the page'); return; }
+    try { const enc = new TextEncoder().encode(purchaseMsg); const signed = await provider.signMessage(enc, 'utf8'); void Array.from(signed.signature); } catch { closeModal(); showMessage('Signature was rejected in Phantom'); return; }
+    if (!window.Web3Lib || !window.SPLLite) { closeModal(); showMessage('Initialization error, please reload the page'); return; }
     const { Connection, PublicKey, Transaction } = window.Web3Lib;
     const { getAssociatedTokenAddress, createTransferCheckedInstruction } = window.SPLLite;
     // Проверяем конфигурацию (mint может быть пустым для SOL transfers)
@@ -1065,6 +1138,10 @@ async function purchaseChest(idChest, chestsCache) {
     let price = 0;
     if (Array.isArray(chestsCache)) { const c = chestsCache.find(c => c.id_chest === Number(idChest)); price = c ? Number(c.price) : 0; }
     else { try { const resp = await fetch('/api/chests'); const d = await resp.json(); if (d && d.success) { const c = (d.chests || []).find(c => c.id_chest === Number(idChest)); price = c ? Number(c.price) : 0; } } catch {} }
+    
+    // Вычисляем общую цену за количество паков
+    const totalPrice = price * quantity;
+    updatePurchaseLoadingStatus('sending', 'Sending transaction to blockchain...');
     try {
       console.log('Creating connection to:', cfg.rpcUrl);
       const connection = new Connection(cfg.rpcUrl);
@@ -1079,7 +1156,7 @@ async function purchaseChest(idChest, chestsCache) {
       const mintInfo = await connection.getParsedAccountInfo(mintPk);
       const decimals = (mintInfo && mintInfo.value && mintInfo.value.data && mintInfo.value.data.parsed && mintInfo.value.data.parsed.info && mintInfo.value.data.parsed.info.decimals) ? mintInfo.value.data.parsed.info.decimals : 0;
       console.log('Mint decimals:', decimals, 'Price:', price);
-      const amountRaw = Math.round(Number(price) * Math.pow(10, decimals));
+      const amountRaw = Math.round(Number(totalPrice) * Math.pow(10, decimals));
       console.log('Amount raw:', amountRaw);
       const tx = new Transaction();
       console.log('Checking merchant ATA...');
@@ -1104,6 +1181,7 @@ async function purchaseChest(idChest, chestsCache) {
           console.log('Transaction sent, signature:', txSignature);
         } catch (txError) {
           console.error('Transaction error:', txError);
+          closeModal(); // Закрываем модальное окно при ошибке
           showMessage(txError?.message || 'Transaction failed. Check console for details.');
           return;
         }
@@ -1115,40 +1193,60 @@ async function purchaseChest(idChest, chestsCache) {
           console.log('Transaction sent, signature:', txSignature);
         } catch (txError) {
           console.error('Transaction error:', txError);
+          closeModal(); // Закрываем модальное окно при ошибке
           showMessage(txError?.message || 'Transaction failed. Check console for details.');
           return;
         }
       }
       else { 
+        closeModal(); // Закрываем модальное окно при ошибке
         showMessage('Your Phantom version does not support sending transactions'); 
         return; 
       }
       console.log('Confirming transaction...');
+      updatePurchaseLoadingStatus('confirming', 'Confirming transaction on blockchain...');
       try { 
         await connection.confirmTransaction({ signature: txSignature, blockhash, lastValidBlockHeight }, 'confirmed'); 
         console.log('Transaction confirmed');
       } catch (confirmError) {
         console.warn('Transaction confirmation error (non-critical):', confirmError);
       }
-      // Show notification that transaction is being verified
-      showMessage('Transaction confirmed! Please wait while we verify your purchase...', 'success');
+      
+      // Обновляем статус - проверка на бэкенде
+      updatePurchaseLoadingStatus('verifying', 'Verifying purchase with server...');
       console.log('Sending purchase request to backend...');
-      const res = await fetch('/api/chests/buy', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wallet: currentWallet, id_chest: Number(idChest), txSignature }) });
+      const res = await fetch('/api/chests/buy', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wallet: currentWallet, id_chest: Number(idChest), txSignature, quantity: quantity }) });
       const resp = await res.json();
       console.log('Backend response:', resp);
-      // Hide the verification message
-      hideMessage();
+      
+      // Закрываем модальное окно загрузки
+      closeModal();
+      
       if (resp.success) {
-        showPurchaseModal(Number(idChest));
+        if (quantity === 1) {
+          showPurchaseModal(Number(idChest));
+        } else {
+          showMessage(`Successfully purchased ${quantity} packs!`, 'success');
+          // Обновляем список паков
+          if (typeof loadUserChests === 'function') {
+            loadUserChests(currentWallet);
+          }
+        }
       } else {
         showMessage(resp.error || 'Failed to buy pack');
       }
     } catch (e) { 
       console.error('Transfer error:', e); 
       console.error('Error stack:', e.stack);
+      closeModal(); // Закрываем модальное окно при ошибке
       showMessage(e?.message || 'Transfer error. Check console for details.'); 
     }
-  } catch (e) { console.error('Buy flow error', e); const msg = (e && (e.message || e.code || e.toString())) || 'Purchase error'; showMessage(msg); }
+  } catch (e) { 
+    console.error('Buy flow error', e); 
+    closeModal(); // Закрываем модальное окно при ошибке
+    const msg = (e && (e.message || e.code || e.toString())) || 'Purchase error'; 
+    showMessage(msg); 
+  }
 }
 
 async function loadChests() {
@@ -1488,6 +1586,51 @@ function getPackLabel(id){
   if (id === 4) return 'LEGENDARY PACK';
   if (id === 5) return 'BROKE PACK';
   return 'BASIC PACK';
+}
+
+function showPurchaseLoadingModal(quantity, idChest) {
+  const { body } = modalElements();
+  if (!body) return;
+  
+  const packText = quantity === 1 ? 'pack' : 'packs';
+  body.innerHTML = `
+    <div class="purchase-loading-modal">
+      <div class="modal-title">Processing Purchase</div>
+      <div class="purchase-loading-content">
+        <div class="purchase-spinner"></div>
+        <div class="purchase-status-text" id="purchase-status-text">Sending transaction...</div>
+        <div class="purchase-status-subtitle" id="purchase-status-subtitle">Please wait, this may take a few moments</div>
+      </div>
+      <div class="purchase-info">
+        <div class="purchase-quantity">Quantity: ${quantity} ${packText}</div>
+        <div class="purchase-note">Do not close this window or navigate away</div>
+      </div>
+    </div>
+  `;
+  openModal();
+}
+
+function updatePurchaseLoadingStatus(stage, message) {
+  const statusText = document.getElementById('purchase-status-text');
+  const statusSubtitle = document.getElementById('purchase-status-subtitle');
+  
+  if (statusText) {
+    statusText.textContent = message;
+  }
+  
+  // Обновляем подзаголовок в зависимости от этапа
+  if (statusSubtitle) {
+    switch(stage) {
+      case 'confirming':
+        statusSubtitle.textContent = 'Waiting for blockchain confirmation...';
+        break;
+      case 'verifying':
+        statusSubtitle.textContent = 'Verifying your purchase with our servers...';
+        break;
+      default:
+        statusSubtitle.textContent = 'Please wait, this may take a few moments';
+    }
+  }
 }
 
 function showPurchaseModal(idChest, opts = {}){
