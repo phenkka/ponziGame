@@ -585,6 +585,212 @@ def setup_api_routes(app):
             "amount": 0
         }
     
+    @app.post("/api/cards/trade")
+    async def trade_cards(request: Request):
+        """Обмен карт: несколько карт одной редкости на одну карту той же редкости"""
+        try:
+            # Проверяем авторизацию
+            x_wallet = request.headers.get("X-Wallet")
+            x_signature = request.headers.get("X-Signature")
+            x_message = request.headers.get("X-Message")
+            
+            if not x_wallet or not x_signature or not x_message:
+                auth_token = request.cookies.get("auth_token")
+                if auth_token:
+                    try:
+                        from core.sessions import verify_session_cookie
+                        auth_data = await verify_session_cookie(request)
+                        x_wallet = auth_data["wallet"]
+                    except Exception as e:
+                        return JSONResponse(
+                            status_code=401,
+                            content={"success": False, "error": "Invalid session"}
+                        )
+                else:
+                    return JSONResponse(
+                        status_code=401,
+                        content={"success": False, "error": "Authentication required"}
+                    )
+            else:
+                try:
+                    auth_data = await verify_auth(x_wallet=x_wallet, x_signature=x_signature, x_message=x_message)
+                except HTTPException as e:
+                    return JSONResponse(
+                        status_code=e.status_code,
+                        content={"success": False, "error": e.detail}
+                    )
+            
+            body = await request.json()
+            wallet = body.get("wallet")
+            cards = body.get("cards", [])  # [{ id_card, quantity }, ...]
+            rarity = body.get("rarity")  # basic, rare, epic
+            
+            if not wallet or not cards or not rarity:
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "error": "Missing required fields: wallet, cards, rarity"}
+                )
+            
+            if rarity not in ['basic', 'rare', 'epic']:
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "error": "Invalid rarity. Only basic, rare, and epic are allowed"}
+                )
+            
+            # Правила обмена
+            req_counts = {'basic': 4, 'rare': 3, 'epic': 2}
+            required_count = req_counts.get(rarity)
+            
+            if not required_count:
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "error": "Invalid rarity for trading"}
+                )
+            
+            # Проверяем общее количество карт
+            total_quantity = sum(c.get('quantity', 0) for c in cards)
+            if total_quantity != required_count:
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "error": f"Need exactly {required_count} cards of {rarity} rarity, got {total_quantity}"}
+                )
+            
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            # Получаем пользователя
+            cursor.execute("SELECT id_user FROM Users WHERE wallet = %s", (wallet,))
+            user = cursor.fetchone()
+            if not user:
+                cursor.close()
+                conn.close()
+                return JSONResponse(
+                    status_code=404,
+                    content={"success": False, "error": "User not found"}
+                )
+            
+            user_id = user['id_user']
+            
+            # Проверяем, что у пользователя достаточно карт и они правильной редкости
+            for card_data in cards:
+                id_card = card_data.get('id_card')
+                quantity = card_data.get('quantity', 0)
+                
+                if not id_card or quantity <= 0:
+                    cursor.close()
+                    conn.close()
+                    return JSONResponse(
+                        status_code=400,
+                        content={"success": False, "error": "Invalid card data"}
+                    )
+                
+                # Проверяем карту и её редкость
+                cursor.execute("""
+                    SELECT c.rarity, COALESCE(cu.quantity, 0) as user_quantity
+                    FROM Cards c
+                    LEFT JOIN Card_User cu ON c.id_card = cu.id_card AND cu.id_user = %s
+                    WHERE c.id_card = %s
+                """, (user_id, id_card))
+                card_info = cursor.fetchone()
+                
+                if not card_info:
+                    cursor.close()
+                    conn.close()
+                    return JSONResponse(
+                        status_code=404,
+                        content={"success": False, "error": f"Card {id_card} not found"}
+                    )
+                
+                if card_info['rarity'] != rarity:
+                    cursor.close()
+                    conn.close()
+                    return JSONResponse(
+                        status_code=400,
+                        content={"success": False, "error": f"Card {id_card} is not {rarity} rarity"}
+                    )
+                
+                if card_info['user_quantity'] < quantity:
+                    cursor.close()
+                    conn.close()
+                    return JSONResponse(
+                        status_code=400,
+                        content={"success": False, "error": f"Not enough cards. You have {card_info['user_quantity']}, need {quantity}"}
+                    )
+            
+            # Удаляем карты (уменьшаем quantity)
+            for card_data in cards:
+                id_card = card_data.get('id_card')
+                quantity = card_data.get('quantity', 0)
+                
+                cursor.execute("""
+                    UPDATE Card_User
+                    SET quantity = quantity - %s
+                    WHERE id_user = %s AND id_card = %s
+                """, (quantity, user_id, id_card))
+                
+                # Если quantity стала 0, удаляем запись
+                cursor.execute("""
+                    DELETE FROM Card_User
+                    WHERE id_user = %s AND id_card = %s AND quantity <= 0
+                """, (user_id, id_card))
+            
+            # Получаем список id_card, которые обмениваются (исключаем их из выборки)
+            traded_card_ids = [c.get('id_card') for c in cards]
+            
+            # Получаем случайную карту той же редкости, исключая обмениваемые карты
+            new_card = get_random_card_by_rarity(rarity, cursor, exclude_card_ids=traded_card_ids)
+            
+            if not new_card:
+                conn.rollback()
+                cursor.close()
+                conn.close()
+                return JSONResponse(
+                    status_code=500,
+                    content={"success": False, "error": f"No {rarity} cards available in the system (excluding traded cards)"}
+                )
+            
+            new_card_id = new_card['id_card']
+            
+            # Добавляем новую карту пользователю (гарантированно другая карта)
+            cursor.execute("""
+                INSERT INTO Card_User (id_user, id_card, quantity)
+                VALUES (%s, %s, 1)
+                ON CONFLICT (id_user, id_card) DO UPDATE SET quantity = Card_User.quantity + 1
+            """, (user_id, new_card_id))
+            
+            # Сохраняем историю трейда
+            import json
+            cursor.execute("""
+                INSERT INTO Card_trades (id_user, traded_cards, received_card_id, rarity)
+                VALUES (%s, %s, %s, %s)
+            """, (user_id, json.dumps(cards), new_card_id, rarity))
+            
+            conn.commit()
+            cursor.close()
+            conn.close()
+            
+            return {
+                "success": True,
+                "card": {
+                    "id_card": new_card['id_card'],
+                    "name": new_card.get('name'),
+                    "rarity": new_card.get('rarity'),
+                    "image_url": new_card.get('image_url')
+                },
+                "message": f"Successfully traded {required_count} {rarity} cards for 1 {rarity} card"
+            }
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            print(f"Trade cards error: {e}")
+            import traceback
+            traceback.print_exc()
+            return JSONResponse(
+                status_code=500,
+                content={"success": False, "error": f"Internal error: {str(e)}"}
+            )
+    
     @app.post("/api/chests/buy")
     async def buy_chest(request: Request):
         """Покупка пака с проверкой транзакции"""

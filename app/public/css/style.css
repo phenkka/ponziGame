@@ -2924,6 +2924,36 @@ body:not(.page-home) .last-jackpot-section .winner-wallet { font-size: 16px; }
     margin-top: 4px;
 }
 
+/* Trade Cards Quantity Selector */
+.trade-qty-btn {
+    transition: all 0.2s;
+    user-select: none;
+}
+
+.trade-qty-btn:hover {
+    background: #3a3a3a !important;
+    border-color: #6A5ACD !important;
+}
+
+.trade-qty-btn:active {
+    transform: scale(0.95);
+}
+
+.trade-qty-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.trade-qty-input {
+    -moz-appearance: textfield;
+}
+
+.trade-qty-input::-webkit-outer-spin-button,
+.trade-qty-input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
 /* Nostalgia Section */
 .nostalgia-section {
     padding: 60px 20px;

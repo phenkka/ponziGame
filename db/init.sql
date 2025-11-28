@@ -85,3 +85,12 @@ create table if not exists Jackpot_tickets_snapshot(
     created_at timestamp default now(),
     unique(id_round, id_user)
 );
+
+create table if not exists Card_trades(
+    id_trade bigserial primary key,
+    id_user bigint not null references Users(id_user) on delete cascade,
+    traded_cards jsonb not null,  -- Массив обмениваемых карт: [{"id_card": 1, "quantity": 4}, ...]
+    received_card_id int not null references Cards(id_card) on delete cascade,
+    rarity text not null check (rarity in ('basic', 'rare', 'epic')),
+    created_at timestamp default now()
+);

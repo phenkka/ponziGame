@@ -55,6 +55,7 @@ def clean_db(db_connection):
         # НЕ удаляем Chests и Cards - это справочные данные, которые должны быть всегда
         cursor.execute("DELETE FROM Chest_openings")
         cursor.execute("DELETE FROM Chest_purchases")
+        cursor.execute("DELETE FROM Card_trades")  # Очищаем историю трейдов
         cursor.execute("DELETE FROM Card_User")
         cursor.execute("DELETE FROM Referral_system")
         cursor.execute("DELETE FROM Jackpot_tickets_snapshot")  # Очищаем snapshot tickets
@@ -85,6 +86,7 @@ def clean_db(db_connection):
     try:
         cursor.execute("DELETE FROM Chest_openings")
         cursor.execute("DELETE FROM Chest_purchases")
+        cursor.execute("DELETE FROM Card_trades")  # Очищаем историю трейдов
         cursor.execute("DELETE FROM Card_User")
         cursor.execute("DELETE FROM Referral_system")
         cursor.execute("DELETE FROM Jackpot_tickets_snapshot")  # Очищаем snapshot tickets

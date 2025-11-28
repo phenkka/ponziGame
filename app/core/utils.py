@@ -433,17 +433,38 @@ def determine_card_rarity(prob_common: int, prob_rare: int, prob_epic: int,
         return 'legendary'
 
 
-def get_random_card_by_rarity(rarity: str, cursor) -> dict:
-    cursor.execute("""
+def get_random_card_by_rarity(rarity: str, cursor, exclude_card_ids: list = None) -> dict:
+    """
+    Получает случайную карту указанной редкости.
+    
+    Args:
+        rarity: Редкость карты ('basic', 'rare', 'epic', 'legendary')
+        cursor: Курсор базы данных
+        exclude_card_ids: Список id_card, которые нужно исключить из выборки
+    
+    Returns:
+        dict: Информация о карте или None, если карта не найдена
+    """
+    if exclude_card_ids is None:
+        exclude_card_ids = []
+    
+    query = """
         SELECT id_card, rarity, start_bounty, name, image_url, image_key
         FROM Cards
         WHERE rarity = %s
         AND image_url IS NOT NULL
         AND image_url != ''
-        ORDER BY RANDOM()
-        LIMIT 1
-    """, (rarity,))
+    """
+    params = [rarity]
     
+    if exclude_card_ids:
+        placeholders = ','.join(['%s'] * len(exclude_card_ids))
+        query += f" AND id_card NOT IN ({placeholders})"
+        params.extend(exclude_card_ids)
+    
+    query += " ORDER BY RANDOM() LIMIT 1"
+    
+    cursor.execute(query, params)
     return cursor.fetchone()
 
 

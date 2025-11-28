@@ -1378,3 +1378,1152 @@ class TestChestPurchaseQuantity:
             # Проверяем, что quantity по умолчанию = 1
             assert data.get("quantity", 1) == 1
 
+
+class TestCardsTradeAPI:
+    """Тесты для API обмена карт"""
+    
+    @pytest.mark.asyncio
+    async def test_trade_cards_requires_auth(self, clean_db, db_connection):
+        """Проверяет, что обмен карт требует авторизацию"""
+        if db_connection is None:
+            pytest.skip("Database not available")
+        
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            response = await client.post(
+                "/api/cards/trade",
+                json={
+                    "wallet": "test_wallet",
+                    "cards": [{"id_card": 1, "quantity": 4}],
+                    "rarity": "basic"
+                }
+            )
+            assert response.status_code == 401
+    
+    @pytest.mark.asyncio
+    async def test_trade_cards_basic_success(self, clean_db, db_connection):
+        """Проверяет успешный обмен 4 обычных карт на 1 обычную"""
+        if db_connection is None:
+            pytest.skip("Database not available")
+        
+        # Создаем пользователя
+        signing_key = SigningKey.generate()
+        verify_key = signing_key.verify_key
+        wallet_address = base58.b58encode(verify_key.encode()).decode('utf-8')
+        
+        cursor = db_connection.cursor()
+        cursor.execute(
+            "INSERT INTO Users (wallet, ref_code) VALUES (%s, %s) RETURNING id_user",
+            (wallet_address, "TESTCODE_TRADE")
+        )
+        user_id = cursor.fetchone()[0]
+        
+        # Создаем одну обычную карту с quantity=4
+        cursor.execute("""
+            INSERT INTO Cards (rarity, start_bounty, name, image_url, image_key)
+            VALUES ('basic', 10, 'Test Basic Card', 'https://example.com/test.png', %s)
+            RETURNING id_card
+        """, (f'TEST_BASIC_{wallet_address[:8]}',))
+        card_id = cursor.fetchone()[0]
+        
+        # Добавляем карту пользователю с quantity=4
+        cursor.execute("""
+            INSERT INTO Card_User (id_user, id_card, quantity)
+            VALUES (%s, %s, 4)
+        """, (user_id, card_id))
+        
+        # Создаем еще одну обычную карту для получения при обмене (нужна для get_random_card_by_rarity)
+        # Важно: image_url должен быть не пустым
+        cursor.execute("""
+            INSERT INTO Cards (rarity, start_bounty, name, image_url, image_key)
+            VALUES ('basic', 10, 'Reward Basic Card', 'https://example.com/reward.png', %s)
+            RETURNING id_card
+        """, (f'TEST_REWARD_BASIC_{wallet_address[:8]}',))
+        reward_card_id = cursor.fetchone()[0]
+        
+        db_connection.commit()
+        cursor.close()
+        
+        message = "Gamba Auth: 1234567890"
+        signed = signing_key.sign(message.encode('utf-8'))
+        signature_list = list(signed.signature)
+        
+        headers = {
+            "X-Wallet": wallet_address,
+            "X-Signature": json.dumps(signature_list),
+            "X-Message": message
+        }
+        
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            response = await client.post(
+                "/api/cards/trade",
+                json={
+                    "wallet": wallet_address,
+                    "cards": [{"id_card": card_id, "quantity": 4}],
+                    "rarity": "basic"
+                },
+                headers=headers
+            )
+            if response.status_code != 200:
+                data = response.json()
+                print(f"Trade failed: {data}")
+            assert response.status_code == 200, f"Expected 200, got {response.status_code}. Response: {response.json()}"
+            data = response.json()
+            assert data["success"] is True
+            assert "card" in data
+            assert data["card"]["rarity"] == "basic"
+            
+            # Проверяем, что карты удалены
+            cursor = db_connection.cursor()
+            cursor.execute("""
+                SELECT quantity FROM Card_User
+                WHERE id_user = %s AND id_card = %s
+            """, (user_id, card_id))
+            result = cursor.fetchone()
+            # Карта должна быть удалена (quantity = 0 или запись удалена)
+            assert result is None or result[0] == 0
+            
+            # Проверяем, что получена новая карта
+            cursor.execute("""
+                SELECT COUNT(*) FROM Card_User
+                WHERE id_user = %s AND id_card = %s
+            """, (user_id, data["card"]["id_card"]))
+            new_card_count = cursor.fetchone()[0]
+            assert new_card_count > 0
+            
+            cursor.close()
+    
+    @pytest.mark.asyncio
+    async def test_trade_cards_rare_success(self, clean_db, db_connection):
+        """Проверяет успешный обмен 3 редких карт на 1 редкую"""
+        if db_connection is None:
+            pytest.skip("Database not available")
+        
+        signing_key = SigningKey.generate()
+        verify_key = signing_key.verify_key
+        wallet_address = base58.b58encode(verify_key.encode()).decode('utf-8')
+        
+        cursor = db_connection.cursor()
+        cursor.execute(
+            "INSERT INTO Users (wallet, ref_code) VALUES (%s, %s) RETURNING id_user",
+            (wallet_address, "TESTCODE_TRADE_RARE")
+        )
+        user_id = cursor.fetchone()[0]
+        
+        # Создаем одну редкую карту с quantity=3
+        cursor.execute("""
+            INSERT INTO Cards (rarity, start_bounty, name, image_url, image_key)
+            VALUES ('rare', 50, 'Test Rare Card', 'https://example.com/test.png', %s)
+            RETURNING id_card
+        """, (f'TEST_RARE_{wallet_address[:8]}',))
+        card_id = cursor.fetchone()[0]
+        
+        cursor.execute("""
+            INSERT INTO Card_User (id_user, id_card, quantity)
+            VALUES (%s, %s, 3)
+        """, (user_id, card_id))
+        
+        # Создаем еще одну редкую карту для получения при обмене
+        cursor.execute("""
+            INSERT INTO Cards (rarity, start_bounty, name, image_url, image_key)
+            VALUES ('rare', 50, 'Reward Rare Card', 'https://example.com/reward.png', %s)
+            RETURNING id_card
+        """, (f'TEST_REWARD_RARE_{wallet_address[:8]}',))
+        
+        db_connection.commit()
+        cursor.close()
+        
+        message = "Gamba Auth: 1234567890"
+        signed = signing_key.sign(message.encode('utf-8'))
+        signature_list = list(signed.signature)
+        
+        headers = {
+            "X-Wallet": wallet_address,
+            "X-Signature": json.dumps(signature_list),
+            "X-Message": message
+        }
+        
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            response = await client.post(
+                "/api/cards/trade",
+                json={
+                    "wallet": wallet_address,
+                    "cards": [{"id_card": card_id, "quantity": 3}],
+                    "rarity": "rare"
+                },
+                headers=headers
+            )
+            assert response.status_code == 200
+            data = response.json()
+            assert data["success"] is True
+            assert data["card"]["rarity"] == "rare"
+    
+    @pytest.mark.asyncio
+    async def test_trade_cards_epic_success(self, clean_db, db_connection):
+        """Проверяет успешный обмен 2 эпичных карт на 1 эпичную"""
+        if db_connection is None:
+            pytest.skip("Database not available")
+        
+        signing_key = SigningKey.generate()
+        verify_key = signing_key.verify_key
+        wallet_address = base58.b58encode(verify_key.encode()).decode('utf-8')
+        
+        cursor = db_connection.cursor()
+        cursor.execute(
+            "INSERT INTO Users (wallet, ref_code) VALUES (%s, %s) RETURNING id_user",
+            (wallet_address, "TESTCODE_TRADE_EPIC")
+        )
+        user_id = cursor.fetchone()[0]
+        
+        # Создаем одну эпичную карту с quantity=2
+        cursor.execute("""
+            INSERT INTO Cards (rarity, start_bounty, name, image_url, image_key)
+            VALUES ('epic', 100, 'Test Epic Card', 'https://example.com/test.png', %s)
+            RETURNING id_card
+        """, (f'TEST_EPIC_{wallet_address[:8]}',))
+        card_id = cursor.fetchone()[0]
+        
+        cursor.execute("""
+            INSERT INTO Card_User (id_user, id_card, quantity)
+            VALUES (%s, %s, 2)
+        """, (user_id, card_id))
+        
+        # Создаем еще одну эпичную карту для получения при обмене
+        cursor.execute("""
+            INSERT INTO Cards (rarity, start_bounty, name, image_url, image_key)
+            VALUES ('epic', 100, 'Reward Epic Card', 'https://example.com/reward.png', %s)
+            RETURNING id_card
+        """, (f'TEST_REWARD_EPIC_{wallet_address[:8]}',))
+        
+        db_connection.commit()
+        cursor.close()
+        
+        message = "Gamba Auth: 1234567890"
+        signed = signing_key.sign(message.encode('utf-8'))
+        signature_list = list(signed.signature)
+        
+        headers = {
+            "X-Wallet": wallet_address,
+            "X-Signature": json.dumps(signature_list),
+            "X-Message": message
+        }
+        
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            response = await client.post(
+                "/api/cards/trade",
+                json={
+                    "wallet": wallet_address,
+                    "cards": [{"id_card": card_id, "quantity": 2}],
+                    "rarity": "epic"
+                },
+                headers=headers
+            )
+            if response.status_code != 200:
+                data = response.json()
+                print(f"Trade failed: {data}")
+            assert response.status_code == 200, f"Expected 200, got {response.status_code}. Response: {response.json()}"
+            data = response.json()
+            assert data["success"] is True
+            assert data["card"]["rarity"] == "epic"
+    
+    @pytest.mark.asyncio
+    async def test_trade_cards_multiple_cards_success(self, clean_db, db_connection):
+        """Проверяет обмен нескольких разных карт одного типа"""
+        if db_connection is None:
+            pytest.skip("Database not available")
+        
+        signing_key = SigningKey.generate()
+        verify_key = signing_key.verify_key
+        wallet_address = base58.b58encode(verify_key.encode()).decode('utf-8')
+        
+        cursor = db_connection.cursor()
+        cursor.execute(
+            "INSERT INTO Users (wallet, ref_code) VALUES (%s, %s) RETURNING id_user",
+            (wallet_address, "TESTCODE_TRADE_MULTI")
+        )
+        user_id = cursor.fetchone()[0]
+        
+        # Создаем 2 разные обычные карты, каждая с quantity=2
+        card_ids = []
+        for i in range(2):
+            cursor.execute("""
+                INSERT INTO Cards (rarity, start_bounty, name, image_url, image_key)
+                VALUES ('basic', 10, %s, 'https://example.com/test.png', %s)
+                RETURNING id_card
+            """, (f'Test Basic {i}', f'TEST_BASIC_MULTI_{i}_{wallet_address[:8]}'))
+            card_id = cursor.fetchone()[0]
+            card_ids.append(card_id)
+            
+            # Каждая карта имеет quantity=2
+            cursor.execute("""
+                INSERT INTO Card_User (id_user, id_card, quantity)
+                VALUES (%s, %s, 2)
+            """, (user_id, card_id))
+        
+        # Создаем еще одну обычную карту для получения при обмене
+        cursor.execute("""
+            INSERT INTO Cards (rarity, start_bounty, name, image_url, image_key)
+            VALUES ('basic', 10, 'Reward Basic Multi', 'https://example.com/reward.png', %s)
+            RETURNING id_card
+        """, (f'TEST_REWARD_BASIC_MULTI_{wallet_address[:8]}',))
+        
+        db_connection.commit()
+        cursor.close()
+        
+        message = "Gamba Auth: 1234567890"
+        signed = signing_key.sign(message.encode('utf-8'))
+        signature_list = list(signed.signature)
+        
+        headers = {
+            "X-Wallet": wallet_address,
+            "X-Signature": json.dumps(signature_list),
+            "X-Message": message
+        }
+        
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            # Обмениваем 2 карты первого типа и 2 карты второго типа
+            response = await client.post(
+                "/api/cards/trade",
+                json={
+                    "wallet": wallet_address,
+                    "cards": [
+                        {"id_card": card_ids[0], "quantity": 2},
+                        {"id_card": card_ids[1], "quantity": 2}
+                    ],
+                    "rarity": "basic"
+                },
+                headers=headers
+            )
+            assert response.status_code == 200
+            data = response.json()
+            assert data["success"] is True
+            assert data["card"]["rarity"] == "basic"
+    
+    @pytest.mark.asyncio
+    async def test_trade_cards_wrong_quantity_basic(self, clean_db, db_connection):
+        """Проверяет, что нельзя обменять неправильное количество карт (basic: нужно 4)"""
+        if db_connection is None:
+            pytest.skip("Database not available")
+        
+        signing_key = SigningKey.generate()
+        verify_key = signing_key.verify_key
+        wallet_address = base58.b58encode(verify_key.encode()).decode('utf-8')
+        
+        cursor = db_connection.cursor()
+        cursor.execute(
+            "INSERT INTO Users (wallet, ref_code) VALUES (%s, %s) RETURNING id_user",
+            (wallet_address, "TESTCODE_TRADE_WRONG")
+        )
+        user_id = cursor.fetchone()[0]
+        
+        # Создаем 3 обычные карты (нужно 4)
+        cursor.execute("""
+            INSERT INTO Cards (rarity, start_bounty, name, image_url, image_key)
+            VALUES ('basic', 10, 'Test Basic', 'https://example.com/test.png', %s)
+            RETURNING id_card
+        """, (f'TEST_BASIC_WRONG_{wallet_address[:8]}',))
+        card_id = cursor.fetchone()[0]
+        
+        cursor.execute("""
+            INSERT INTO Card_User (id_user, id_card, quantity)
+            VALUES (%s, %s, 3)
+        """, (user_id, card_id))
+        
+        db_connection.commit()
+        cursor.close()
+        
+        message = "Gamba Auth: 1234567890"
+        signed = signing_key.sign(message.encode('utf-8'))
+        signature_list = list(signed.signature)
+        
+        headers = {
+            "X-Wallet": wallet_address,
+            "X-Signature": json.dumps(signature_list),
+            "X-Message": message
+        }
+        
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            # Пытаемся обменять 3 карты (нужно 4)
+            response = await client.post(
+                "/api/cards/trade",
+                json={
+                    "wallet": wallet_address,
+                    "cards": [{"id_card": card_id, "quantity": 3}],
+                    "rarity": "basic"
+                },
+                headers=headers
+            )
+            assert response.status_code == 400
+            data = response.json()
+            assert data["success"] is False
+            assert "Need exactly 4 cards" in data["error"]
+    
+    @pytest.mark.asyncio
+    async def test_trade_cards_wrong_quantity_rare(self, clean_db, db_connection):
+        """Проверяет, что нельзя обменять неправильное количество редких карт (нужно 3)"""
+        if db_connection is None:
+            pytest.skip("Database not available")
+        
+        signing_key = SigningKey.generate()
+        verify_key = signing_key.verify_key
+        wallet_address = base58.b58encode(verify_key.encode()).decode('utf-8')
+        
+        cursor = db_connection.cursor()
+        cursor.execute(
+            "INSERT INTO Users (wallet, ref_code) VALUES (%s, %s) RETURNING id_user",
+            (wallet_address, "TESTCODE_TRADE_RARE_WRONG")
+        )
+        user_id = cursor.fetchone()[0]
+        
+        cursor.execute("""
+            INSERT INTO Cards (rarity, start_bounty, name, image_url, image_key)
+            VALUES ('rare', 50, 'Test Rare', 'https://example.com/test.png', %s)
+            RETURNING id_card
+        """, (f'TEST_RARE_WRONG_{wallet_address[:8]}',))
+        card_id = cursor.fetchone()[0]
+        
+        cursor.execute("""
+            INSERT INTO Card_User (id_user, id_card, quantity)
+            VALUES (%s, %s, 2)
+        """, (user_id, card_id))
+        
+        db_connection.commit()
+        cursor.close()
+        
+        message = "Gamba Auth: 1234567890"
+        signed = signing_key.sign(message.encode('utf-8'))
+        signature_list = list(signed.signature)
+        
+        headers = {
+            "X-Wallet": wallet_address,
+            "X-Signature": json.dumps(signature_list),
+            "X-Message": message
+        }
+        
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            response = await client.post(
+                "/api/cards/trade",
+                json={
+                    "wallet": wallet_address,
+                    "cards": [{"id_card": card_id, "quantity": 2}],
+                    "rarity": "rare"
+                },
+                headers=headers
+            )
+            assert response.status_code == 400
+            data = response.json()
+            assert data["success"] is False
+            assert "Need exactly 3 cards" in data["error"]
+    
+    @pytest.mark.asyncio
+    async def test_trade_cards_wrong_rarity(self, clean_db, db_connection):
+        """Проверяет, что нельзя обменять карты неправильной редкости"""
+        if db_connection is None:
+            pytest.skip("Database not available")
+        
+        signing_key = SigningKey.generate()
+        verify_key = signing_key.verify_key
+        wallet_address = base58.b58encode(verify_key.encode()).decode('utf-8')
+        
+        cursor = db_connection.cursor()
+        cursor.execute(
+            "INSERT INTO Users (wallet, ref_code) VALUES (%s, %s) RETURNING id_user",
+            (wallet_address, "TESTCODE_TRADE_RARITY")
+        )
+        user_id = cursor.fetchone()[0]
+        
+        # Создаем редкую карту
+        cursor.execute("""
+            INSERT INTO Cards (rarity, start_bounty, name, image_url, image_key)
+            VALUES ('rare', 50, 'Test Rare', 'https://example.com/test.png', %s)
+            RETURNING id_card
+        """, (f'TEST_RARE_RARITY_{wallet_address[:8]}',))
+        card_id = cursor.fetchone()[0]
+        
+        cursor.execute("""
+            INSERT INTO Card_User (id_user, id_card, quantity)
+            VALUES (%s, %s, 4)
+        """, (user_id, card_id))
+        
+        db_connection.commit()
+        cursor.close()
+        
+        message = "Gamba Auth: 1234567890"
+        signed = signing_key.sign(message.encode('utf-8'))
+        signature_list = list(signed.signature)
+        
+        headers = {
+            "X-Wallet": wallet_address,
+            "X-Signature": json.dumps(signature_list),
+            "X-Message": message
+        }
+        
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            # Пытаемся обменять редкую карту как обычную (4 карты для basic)
+            response = await client.post(
+                "/api/cards/trade",
+                json={
+                    "wallet": wallet_address,
+                    "cards": [{"id_card": card_id, "quantity": 4}],
+                    "rarity": "basic"
+                },
+                headers=headers
+            )
+            assert response.status_code == 400
+            data = response.json()
+            assert data["success"] is False
+            # Проверяем, что ошибка связана с неправильной редкостью
+            assert "is not basic rarity" in data["error"] or "Need exactly 4 cards" in data["error"]
+    
+    @pytest.mark.asyncio
+    async def test_trade_cards_not_enough_cards(self, clean_db, db_connection):
+        """Проверяет, что нельзя обменять больше карт, чем есть у пользователя"""
+        if db_connection is None:
+            pytest.skip("Database not available")
+        
+        signing_key = SigningKey.generate()
+        verify_key = signing_key.verify_key
+        wallet_address = base58.b58encode(verify_key.encode()).decode('utf-8')
+        
+        cursor = db_connection.cursor()
+        cursor.execute(
+            "INSERT INTO Users (wallet, ref_code) VALUES (%s, %s) RETURNING id_user",
+            (wallet_address, "TESTCODE_TRADE_NOT_ENOUGH")
+        )
+        user_id = cursor.fetchone()[0]
+        
+        cursor.execute("""
+            INSERT INTO Cards (rarity, start_bounty, name, image_url, image_key)
+            VALUES ('basic', 10, 'Test Basic', 'https://example.com/test.png', %s)
+            RETURNING id_card
+        """, (f'TEST_BASIC_NOT_ENOUGH_{wallet_address[:8]}',))
+        card_id = cursor.fetchone()[0]
+        
+        # У пользователя только 2 карты
+        cursor.execute("""
+            INSERT INTO Card_User (id_user, id_card, quantity)
+            VALUES (%s, %s, 2)
+        """, (user_id, card_id))
+        
+        db_connection.commit()
+        cursor.close()
+        
+        message = "Gamba Auth: 1234567890"
+        signed = signing_key.sign(message.encode('utf-8'))
+        signature_list = list(signed.signature)
+        
+        headers = {
+            "X-Wallet": wallet_address,
+            "X-Signature": json.dumps(signature_list),
+            "X-Message": message
+        }
+        
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            # Пытаемся обменять 4 карты (есть только 2)
+            response = await client.post(
+                "/api/cards/trade",
+                json={
+                    "wallet": wallet_address,
+                    "cards": [{"id_card": card_id, "quantity": 4}],
+                    "rarity": "basic"
+                },
+                headers=headers
+            )
+            assert response.status_code == 400
+            data = response.json()
+            assert data["success"] is False
+            assert "Not enough cards" in data["error"]
+    
+    @pytest.mark.asyncio
+    async def test_trade_cards_wrong_user(self, clean_db, db_connection):
+        """Проверяет, что нельзя обменять чужие карты"""
+        if db_connection is None:
+            pytest.skip("Database not available")
+        
+        # Создаем двух пользователей
+        signing_key_1 = SigningKey.generate()
+        wallet_1 = base58.b58encode(signing_key_1.verify_key.encode()).decode('utf-8')
+        
+        signing_key_2 = SigningKey.generate()
+        wallet_2 = base58.b58encode(signing_key_2.verify_key.encode()).decode('utf-8')
+        
+        cursor = db_connection.cursor()
+        cursor.execute(
+            "INSERT INTO Users (wallet, ref_code) VALUES (%s, %s) RETURNING id_user",
+            (wallet_1, "TESTCODE_USER1")
+        )
+        user1_id = cursor.fetchone()[0]
+        
+        cursor.execute(
+            "INSERT INTO Users (wallet, ref_code) VALUES (%s, %s) RETURNING id_user",
+            (wallet_2, "TESTCODE_USER2")
+        )
+        user2_id = cursor.fetchone()[0]
+        
+        # Пользователь 1 создает карту
+        cursor.execute("""
+            INSERT INTO Cards (rarity, start_bounty, name, image_url, image_key)
+            VALUES ('basic', 10, 'User1 Card', 'test.png', %s)
+            RETURNING id_card
+        """, (f'TEST_USER1_CARD_{wallet_1[:8]}',))
+        card_id = cursor.fetchone()[0]
+        
+        # Пользователь 1 получает 4 карты
+        cursor.execute("""
+            INSERT INTO Card_User (id_user, id_card, quantity)
+            VALUES (%s, %s, 4)
+        """, (user1_id, card_id))
+        
+        db_connection.commit()
+        cursor.close()
+        
+        # Пользователь 2 пытается обменять карты пользователя 1
+        message = "Gamba Auth: 1234567890"
+        signed = signing_key_2.sign(message.encode('utf-8'))
+        signature_list = list(signed.signature)
+        
+        headers = {
+            "X-Wallet": wallet_2,
+            "X-Signature": json.dumps(signature_list),
+            "X-Message": message
+        }
+        
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            response = await client.post(
+                "/api/cards/trade",
+                json={
+                    "wallet": wallet_2,
+                    "cards": [{"id_card": card_id, "quantity": 4}],
+                    "rarity": "basic"
+                },
+                headers=headers
+            )
+            assert response.status_code == 400
+            data = response.json()
+            assert data["success"] is False
+            assert "Not enough cards" in data["error"] or "You have 0" in data["error"]
+    
+    @pytest.mark.asyncio
+    async def test_trade_cards_legendary_not_allowed(self, clean_db, db_connection):
+        """Проверяет, что нельзя обменять легендарные карты"""
+        if db_connection is None:
+            pytest.skip("Database not available")
+        
+        signing_key = SigningKey.generate()
+        verify_key = signing_key.verify_key
+        wallet_address = base58.b58encode(verify_key.encode()).decode('utf-8')
+        
+        cursor = db_connection.cursor()
+        cursor.execute(
+            "INSERT INTO Users (wallet, ref_code) VALUES (%s, %s) RETURNING id_user",
+            (wallet_address, "TESTCODE_TRADE_LEG")
+        )
+        user_id = cursor.fetchone()[0]
+        
+        cursor.execute("""
+            INSERT INTO Cards (rarity, start_bounty, name, image_url, image_key)
+            VALUES ('legendary', 1000, 'Test Legendary', 'https://example.com/test.png', %s)
+            RETURNING id_card
+        """, (f'TEST_LEG_{wallet_address[:8]}',))
+        card_id = cursor.fetchone()[0]
+        
+        cursor.execute("""
+            INSERT INTO Card_User (id_user, id_card, quantity)
+            VALUES (%s, %s, 1)
+        """, (user_id, card_id))
+        
+        db_connection.commit()
+        cursor.close()
+        
+        message = "Gamba Auth: 1234567890"
+        signed = signing_key.sign(message.encode('utf-8'))
+        signature_list = list(signed.signature)
+        
+        headers = {
+            "X-Wallet": wallet_address,
+            "X-Signature": json.dumps(signature_list),
+            "X-Message": message
+        }
+        
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            response = await client.post(
+                "/api/cards/trade",
+                json={
+                    "wallet": wallet_address,
+                    "cards": [{"id_card": card_id, "quantity": 1}],
+                    "rarity": "legendary"
+                },
+                headers=headers
+            )
+            assert response.status_code == 400
+            data = response.json()
+            assert data["success"] is False
+            assert "Only basic, rare, and epic are allowed" in data["error"] or "Invalid rarity" in data["error"]
+    
+    @pytest.mark.asyncio
+    async def test_trade_cards_missing_fields(self, clean_db, db_connection):
+        """Проверяет, что все обязательные поля должны быть указаны"""
+        if db_connection is None:
+            pytest.skip("Database not available")
+        
+        signing_key = SigningKey.generate()
+        verify_key = signing_key.verify_key
+        wallet_address = base58.b58encode(verify_key.encode()).decode('utf-8')
+        
+        cursor = db_connection.cursor()
+        cursor.execute(
+            "INSERT INTO Users (wallet, ref_code) VALUES (%s, %s)",
+            (wallet_address, "TESTCODE_TRADE_MISSING")
+        )
+        db_connection.commit()
+        cursor.close()
+        
+        message = "Gamba Auth: 1234567890"
+        signed = signing_key.sign(message.encode('utf-8'))
+        signature_list = list(signed.signature)
+        
+        headers = {
+            "X-Wallet": wallet_address,
+            "X-Signature": json.dumps(signature_list),
+            "X-Message": message
+        }
+        
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            # Без cards
+            response = await client.post(
+                "/api/cards/trade",
+                json={
+                    "wallet": wallet_address,
+                    "rarity": "basic"
+                },
+                headers=headers
+            )
+            assert response.status_code == 400
+            data = response.json()
+            assert data["success"] is False
+            assert "Missing required fields" in data["error"]
+    
+    @pytest.mark.asyncio
+    async def test_trade_cards_quantity_decreases_correctly(self, clean_db, db_connection):
+        """Проверяет, что количество карт уменьшается правильно при обмене"""
+        if db_connection is None:
+            pytest.skip("Database not available")
+        
+        signing_key = SigningKey.generate()
+        verify_key = signing_key.verify_key
+        wallet_address = base58.b58encode(verify_key.encode()).decode('utf-8')
+        
+        cursor = db_connection.cursor()
+        cursor.execute(
+            "INSERT INTO Users (wallet, ref_code) VALUES (%s, %s) RETURNING id_user",
+            (wallet_address, "TESTCODE_TRADE_QTY")
+        )
+        user_id = cursor.fetchone()[0]
+        
+        # Создаем карту с quantity = 6
+        cursor.execute("""
+            INSERT INTO Cards (rarity, start_bounty, name, image_url, image_key)
+            VALUES ('basic', 10, 'Test Basic', 'https://example.com/test.png', %s)
+            RETURNING id_card
+        """, (f'TEST_BASIC_QTY_{wallet_address[:8]}',))
+        card_id = cursor.fetchone()[0]
+        
+        cursor.execute("""
+            INSERT INTO Card_User (id_user, id_card, quantity)
+            VALUES (%s, %s, 6)
+        """, (user_id, card_id))
+        
+        db_connection.commit()
+        cursor.close()
+        
+        message = "Gamba Auth: 1234567890"
+        signed = signing_key.sign(message.encode('utf-8'))
+        signature_list = list(signed.signature)
+        
+        headers = {
+            "X-Wallet": wallet_address,
+            "X-Signature": json.dumps(signature_list),
+            "X-Message": message
+        }
+        
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            # Обмениваем 4 карты
+            response = await client.post(
+                "/api/cards/trade",
+                json={
+                    "wallet": wallet_address,
+                    "cards": [{"id_card": card_id, "quantity": 4}],
+                    "rarity": "basic"
+                },
+                headers=headers
+            )
+            assert response.status_code == 200
+            data = response.json()
+            assert data["success"] is True
+            
+            # Проверяем, что осталось 2 карты (6 - 4 = 2)
+            # Новая карта гарантированно другая (не может быть той же, что обменивается)
+            cursor = db_connection.cursor()
+            cursor.execute("""
+                SELECT quantity FROM Card_User
+                WHERE id_user = %s AND id_card = %s
+            """, (user_id, card_id))
+            result = cursor.fetchone()
+            assert result is not None
+            assert result[0] == 2, f"Expected 2 cards remaining, got {result[0]}"
+            
+            # Проверяем, что новая карта действительно другая
+            new_card_id = data["card"]["id_card"]
+            assert new_card_id != card_id, "New card should be different from traded card"
+            
+            cursor.close()
+    
+    @pytest.mark.asyncio
+    async def test_trade_cards_card_removed_when_quantity_zero(self, clean_db, db_connection):
+        """Проверяет, что карта удаляется из Card_User когда quantity становится 0"""
+        if db_connection is None:
+            pytest.skip("Database not available")
+        
+        signing_key = SigningKey.generate()
+        verify_key = signing_key.verify_key
+        wallet_address = base58.b58encode(verify_key.encode()).decode('utf-8')
+        
+        cursor = db_connection.cursor()
+        cursor.execute(
+            "INSERT INTO Users (wallet, ref_code) VALUES (%s, %s) RETURNING id_user",
+            (wallet_address, "TESTCODE_TRADE_REMOVE")
+        )
+        user_id = cursor.fetchone()[0]
+        
+        cursor.execute("""
+            INSERT INTO Cards (rarity, start_bounty, name, image_url, image_key)
+            VALUES ('basic', 10, 'Test Basic', 'https://example.com/test.png', %s)
+            RETURNING id_card
+        """, (f'TEST_BASIC_REMOVE_{wallet_address[:8]}',))
+        card_id = cursor.fetchone()[0]
+        
+        # У пользователя ровно 4 карты
+        cursor.execute("""
+            INSERT INTO Card_User (id_user, id_card, quantity)
+            VALUES (%s, %s, 4)
+        """, (user_id, card_id))
+        
+        db_connection.commit()
+        cursor.close()
+        
+        message = "Gamba Auth: 1234567890"
+        signed = signing_key.sign(message.encode('utf-8'))
+        signature_list = list(signed.signature)
+        
+        headers = {
+            "X-Wallet": wallet_address,
+            "X-Signature": json.dumps(signature_list),
+            "X-Message": message
+        }
+        
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            response = await client.post(
+                "/api/cards/trade",
+                json={
+                    "wallet": wallet_address,
+                    "cards": [{"id_card": card_id, "quantity": 4}],
+                    "rarity": "basic"
+                },
+                headers=headers
+            )
+            assert response.status_code == 200
+            data = response.json()
+            assert data["success"] is True
+            
+            # Проверяем, что обмениваемая карта удалена или quantity = 0
+            # (если новая карта имеет тот же id_card, то quantity будет 1)
+            cursor = db_connection.cursor()
+            cursor.execute("""
+                SELECT quantity FROM Card_User
+                WHERE id_user = %s AND id_card = %s
+            """, (user_id, card_id))
+            result = cursor.fetchone()
+            
+            new_card_id = data["card"]["id_card"]
+            if new_card_id == card_id:
+                # Если новая карта та же самая, то quantity должна быть 1 (новая карта)
+                assert result is not None
+                assert result[0] == 1
+            else:
+                # Если новая карта другая, то старая запись должна быть удалена
+                assert result is None or result[0] == 0
+            
+            cursor.close()
+    
+    @pytest.mark.asyncio
+    async def test_trade_cards_saves_to_history(self, clean_db, db_connection):
+        """Проверяет, что обмен сохраняется в таблицу Card_trades"""
+        if db_connection is None:
+            pytest.skip("Database not available")
+        
+        signing_key = SigningKey.generate()
+        verify_key = signing_key.verify_key
+        wallet_address = base58.b58encode(verify_key.encode()).decode('utf-8')
+        
+        cursor = db_connection.cursor()
+        cursor.execute(
+            "INSERT INTO Users (wallet, ref_code) VALUES (%s, %s) RETURNING id_user",
+            (wallet_address, "TESTCODE_TRADE_HISTORY")
+        )
+        user_id = cursor.fetchone()[0]
+        
+        # Создаем одну обычную карту с quantity=4
+        cursor.execute("""
+            INSERT INTO Cards (rarity, start_bounty, name, image_url, image_key)
+            VALUES ('basic', 10, 'Test Basic', 'https://example.com/test.png', %s)
+            RETURNING id_card
+        """, (f'TEST_BASIC_HISTORY_{wallet_address[:8]}',))
+        card_id = cursor.fetchone()[0]
+        
+        cursor.execute("""
+            INSERT INTO Card_User (id_user, id_card, quantity)
+            VALUES (%s, %s, 4)
+        """, (user_id, card_id))
+        
+        # Создаем еще одну обычную карту для получения при обмене
+        cursor.execute("""
+            INSERT INTO Cards (rarity, start_bounty, name, image_url, image_key)
+            VALUES ('basic', 10, 'Reward Basic', 'https://example.com/reward.png', %s)
+            RETURNING id_card
+        """, (f'TEST_REWARD_BASIC_HISTORY_{wallet_address[:8]}',))
+        
+        db_connection.commit()
+        cursor.close()
+        
+        message = "Gamba Auth: 1234567890"
+        signed = signing_key.sign(message.encode('utf-8'))
+        signature_list = list(signed.signature)
+        
+        headers = {
+            "X-Wallet": wallet_address,
+            "X-Signature": json.dumps(signature_list),
+            "X-Message": message
+        }
+        
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            response = await client.post(
+                "/api/cards/trade",
+                json={
+                    "wallet": wallet_address,
+                    "cards": [{"id_card": card_id, "quantity": 4}],
+                    "rarity": "basic"
+                },
+                headers=headers
+            )
+            assert response.status_code == 200
+            data = response.json()
+            assert data["success"] is True
+            
+            # Проверяем, что запись создана в Card_trades
+            from psycopg2.extras import RealDictCursor
+            cursor = db_connection.cursor(cursor_factory=RealDictCursor)
+            cursor.execute("""
+                SELECT id_trade, id_user, traded_cards, received_card_id, rarity
+                FROM Card_trades
+                WHERE id_user = %s
+                ORDER BY created_at DESC
+                LIMIT 1
+            """, (user_id,))
+            trade_record = cursor.fetchone()
+            
+            assert trade_record is not None, "Trade record should be saved to Card_trades"
+            assert trade_record['id_user'] == user_id
+            assert trade_record['rarity'] == 'basic'
+            
+            # Проверяем traded_cards (JSONB)
+            # PostgreSQL возвращает JSONB как dict через psycopg2, не как строку
+            traded_cards = trade_record['traded_cards']
+            if isinstance(traded_cards, str):
+                traded_cards = json.loads(traded_cards)
+            assert isinstance(traded_cards, list), f"traded_cards should be a list, got {type(traded_cards)}"
+            assert len(traded_cards) == 1
+            assert traded_cards[0]['id_card'] == card_id
+            assert traded_cards[0]['quantity'] == 4
+            
+            # Проверяем received_card_id
+            assert trade_record['received_card_id'] == data["card"]["id_card"]
+            
+            cursor.close()
+    
+    @pytest.mark.asyncio
+    async def test_trade_cards_new_card_not_in_traded(self, clean_db, db_connection):
+        """Проверяет, что новая карта не может быть того же типа, что обмениваемые"""
+        if db_connection is None:
+            pytest.skip("Database not available")
+        
+        signing_key = SigningKey.generate()
+        verify_key = signing_key.verify_key
+        wallet_address = base58.b58encode(verify_key.encode()).decode('utf-8')
+        
+        cursor = db_connection.cursor()
+        cursor.execute(
+            "INSERT INTO Users (wallet, ref_code) VALUES (%s, %s) RETURNING id_user",
+            (wallet_address, "TESTCODE_TRADE_EXCLUDE")
+        )
+        user_id = cursor.fetchone()[0]
+        
+        # Создаем 2 разные обычные карты
+        card_ids = []
+        for i in range(2):
+            cursor.execute("""
+                INSERT INTO Cards (rarity, start_bounty, name, image_url, image_key)
+                VALUES ('basic', 10, %s, 'https://example.com/test.png', %s)
+                RETURNING id_card
+            """, (f'Test Basic {i}', f'TEST_BASIC_EXCLUDE_{i}_{wallet_address[:8]}'))
+            card_id = cursor.fetchone()[0]
+            card_ids.append(card_id)
+            
+            # Каждая карта имеет quantity=2
+            cursor.execute("""
+                INSERT INTO Card_User (id_user, id_card, quantity)
+                VALUES (%s, %s, 2)
+            """, (user_id, card_id))
+        
+        # Создаем еще одну обычную карту для получения при обмене (должна быть выбрана)
+        cursor.execute("""
+            INSERT INTO Cards (rarity, start_bounty, name, image_url, image_key)
+            VALUES ('basic', 10, 'Reward Basic', 'https://example.com/reward.png', %s)
+            RETURNING id_card
+        """, (f'TEST_REWARD_BASIC_EXCLUDE_{wallet_address[:8]}',))
+        reward_card_id = cursor.fetchone()[0]
+        
+        db_connection.commit()
+        cursor.close()
+        
+        message = "Gamba Auth: 1234567890"
+        signed = signing_key.sign(message.encode('utf-8'))
+        signature_list = list(signed.signature)
+        
+        headers = {
+            "X-Wallet": wallet_address,
+            "X-Signature": json.dumps(signature_list),
+            "X-Message": message
+        }
+        
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            # Обмениваем 2 карты первого типа и 2 карты второго типа
+            response = await client.post(
+                "/api/cards/trade",
+                json={
+                    "wallet": wallet_address,
+                    "cards": [
+                        {"id_card": card_ids[0], "quantity": 2},
+                        {"id_card": card_ids[1], "quantity": 2}
+                    ],
+                    "rarity": "basic"
+                },
+                headers=headers
+            )
+            assert response.status_code == 200
+            data = response.json()
+            assert data["success"] is True
+            
+            # Проверяем, что новая карта не совпадает с обмениваемыми
+            new_card_id = data["card"]["id_card"]
+            assert new_card_id != card_ids[0], "New card should not be the same as first traded card"
+            assert new_card_id != card_ids[1], "New card should not be the same as second traded card"
+            
+            # Проверяем, что новая карта существует в системе
+            cursor = db_connection.cursor()
+            cursor.execute("""
+                SELECT id_card FROM Cards WHERE id_card = %s
+            """, (new_card_id,))
+            card_exists = cursor.fetchone()
+            assert card_exists is not None, "New card should exist in Cards table"
+            
+            # Проверяем, что новая карта добавлена пользователю
+            cursor.execute("""
+                SELECT quantity FROM Card_User
+                WHERE id_user = %s AND id_card = %s
+            """, (user_id, new_card_id))
+            user_card = cursor.fetchone()
+            assert user_card is not None, "New card should be added to user"
+            assert user_card[0] >= 1, "New card quantity should be at least 1"
+            
+            cursor.close()
+    
+    @pytest.mark.asyncio
+    async def test_trade_cards_excludes_all_traded_cards(self, clean_db, db_connection):
+        """Проверяет, что все обмениваемые карты исключаются из выборки новой карты"""
+        if db_connection is None:
+            pytest.skip("Database not available")
+        
+        signing_key = SigningKey.generate()
+        verify_key = signing_key.verify_key
+        wallet_address = base58.b58encode(verify_key.encode()).decode('utf-8')
+        
+        cursor = db_connection.cursor()
+        cursor.execute(
+            "INSERT INTO Users (wallet, ref_code) VALUES (%s, %s) RETURNING id_user",
+            (wallet_address, "TESTCODE_TRADE_EXCLUDE_ALL")
+        )
+        user_id = cursor.fetchone()[0]
+        
+        # Создаем 4 разные обычные карты
+        card_ids = []
+        for i in range(4):
+            cursor.execute("""
+                INSERT INTO Cards (rarity, start_bounty, name, image_url, image_key)
+                VALUES ('basic', 10, %s, 'https://example.com/test.png', %s)
+                RETURNING id_card
+            """, (f'Test Basic {i}', f'TEST_BASIC_EXCLUDE_ALL_{i}_{wallet_address[:8]}'))
+            card_id = cursor.fetchone()[0]
+            card_ids.append(card_id)
+            
+            cursor.execute("""
+                INSERT INTO Card_User (id_user, id_card, quantity)
+                VALUES (%s, %s, 1)
+            """, (user_id, card_id))
+        
+        # Создаем еще одну обычную карту для получения при обмене
+        cursor.execute("""
+            INSERT INTO Cards (rarity, start_bounty, name, image_url, image_key)
+            VALUES ('basic', 10, 'Reward Basic', 'https://example.com/reward.png', %s)
+            RETURNING id_card
+        """, (f'TEST_REWARD_BASIC_EXCLUDE_ALL_{wallet_address[:8]}',))
+        reward_card_id = cursor.fetchone()[0]
+        
+        db_connection.commit()
+        cursor.close()
+        
+        message = "Gamba Auth: 1234567890"
+        signed = signing_key.sign(message.encode('utf-8'))
+        signature_list = list(signed.signature)
+        
+        headers = {
+            "X-Wallet": wallet_address,
+            "X-Signature": json.dumps(signature_list),
+            "X-Message": message
+        }
+        
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            # Обмениваем все 4 карты (по 1 каждого типа)
+            response = await client.post(
+                "/api/cards/trade",
+                json={
+                    "wallet": wallet_address,
+                    "cards": [
+                        {"id_card": card_ids[0], "quantity": 1},
+                        {"id_card": card_ids[1], "quantity": 1},
+                        {"id_card": card_ids[2], "quantity": 1},
+                        {"id_card": card_ids[3], "quantity": 1}
+                    ],
+                    "rarity": "basic"
+                },
+                headers=headers
+            )
+            assert response.status_code == 200
+            data = response.json()
+            assert data["success"] is True
+            
+            # Проверяем, что новая карта не совпадает ни с одной из обмениваемых
+            new_card_id = data["card"]["id_card"]
+            for traded_card_id in card_ids:
+                assert new_card_id != traded_card_id, f"New card (id={new_card_id}) should not be the same as traded card (id={traded_card_id})"
+            
+            cursor.close()
+

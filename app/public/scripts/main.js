@@ -1429,30 +1429,50 @@ async function loadUserCards(wallet) {
 async function openTradeModal(requestedRarity) {
   const { body } = modalElements();
   if (!body) return;
-  const reqCounts = { basic: 4, rare: 3, epic: 2, legendary: 1 };
-  let active = 'basic';
-  // Load user's copies (per-copy items) to populate modal
-  let copiesByRarity = { basic: [], rare: [], epic: [], legendary: [] };
+  const reqCounts = { basic: 4, rare: 3, epic: 2 }; // Убрали legendary
+  let active = requestedRarity || 'basic';
+  
+  // Load user's cards with quantity
+  let cardsByRarity = { basic: [], rare: [], epic: [] };
   try {
-    const res = await fetch(`/api/user/${currentWallet}/copies`);
+    const res = await fetch(`/api/user/${currentWallet}/cards`, {
+      headers: {
+        'X-Wallet': currentWallet,
+        'X-Signature': sessionStorage.getItem('signature') || '',
+        'X-Message': sessionStorage.getItem('message') || ''
+      }
+    });
     const data = await res.json();
-    const copies = (data && data.copies) ? data.copies : [];
-    copies.forEach(c => { if (c.rarity === 'common') c.rarity = 'basic'; });
-    copiesByRarity = {
-      basic: copies.filter(c => c.rarity === 'basic'),
-      rare: copies.filter(c => c.rarity === 'rare'),
-      epic: copies.filter(c => c.rarity === 'epic'),
-      legendary: copies.filter(c => c.rarity === 'legendary')
+    const cards = (data && data.cards) ? data.cards : [];
+    cards.forEach(c => { if (c.rarity === 'common') c.rarity = 'basic'; });
+    cardsByRarity = {
+      basic: cards.filter(c => c.rarity === 'basic' && c.quantity > 0),
+      rare: cards.filter(c => c.rarity === 'rare' && c.quantity > 0),
+      epic: cards.filter(c => c.rarity === 'epic' && c.quantity > 0)
     };
-    if (requestedRarity && Array.isArray(copiesByRarity[requestedRarity])) active = requestedRarity;
-  } catch (_) {}
+    if (requestedRarity && Array.isArray(cardsByRarity[requestedRarity]) && cardsByRarity[requestedRarity].length > 0) {
+      active = requestedRarity;
+    } else if (cardsByRarity.basic.length === 0 && cardsByRarity.rare.length === 0 && cardsByRarity.epic.length === 0) {
+      showMessage('You have no cards to trade');
+      return;
+    } else if (cardsByRarity[active].length === 0) {
+      // Если активная вкладка пуста, выбираем первую непустую
+      if (cardsByRarity.basic.length > 0) active = 'basic';
+      else if (cardsByRarity.rare.length > 0) active = 'rare';
+      else if (cardsByRarity.epic.length > 0) active = 'epic';
+    }
+  } catch (e) {
+    console.error('Error loading cards for trade:', e);
+    showMessage('Failed to load cards');
+    return;
+  }
+  
   body.innerHTML = `
-    <div class="modal-title">Trade Cards</div>
+    <div class="modal-title">TRADE CARDS</div>
     <div style="display:flex;gap:12px;margin:8px 0;">
       <button class="btn ${active === 'basic' ? 'btn-primary' : 'btn-secondary'}" data-r="basic">BASIC</button>
       <button class="btn ${active === 'rare' ? 'btn-primary' : 'btn-secondary'}" data-r="rare">RARE</button>
       <button class="btn ${active === 'epic' ? 'btn-primary' : 'btn-secondary'}" data-r="epic">EPIC</button>
-      <button class="btn ${active === 'legendary' ? 'btn-primary' : 'btn-secondary'}" data-r="legendary">LEGENDARY</button>
     </div>
     <div id="trade-grid" style="width:100%;max-height:50vh;overflow:auto;text-align:left"></div>
     <div style="margin-top:8px;opacity:.9;font-family:'Inter',sans-serif">Select <span id="needCnt">${reqCounts[active]}</span> cards to trade</div>
@@ -1468,8 +1488,8 @@ async function openTradeModal(requestedRarity) {
   const cancelBtn = document.getElementById('trade-cancel');
   const tabBtns = body.querySelectorAll('button[data-r]');
 
-  // Selected exact copy ids for trade
-  let selectedItemIdsLocal = new Set();
+  // Selected cards with quantities: { id_card: quantity }
+  let selectedCardsLocal = {};
 
   function renderTrade(r) {
     active = r;
@@ -1479,55 +1499,107 @@ async function openTradeModal(requestedRarity) {
     });
     needCntEl.textContent = String(reqCounts[r]);
     submitBtn.disabled = true;
-    const arr = copiesByRarity[r] || [];
+    selectedCardsLocal = {}; // Сбрасываем выбор при смене вкладки
+    const arr = cardsByRarity[r] || [];
     grid.innerHTML = '';
-    arr.forEach(copy => {
+    
+    if (arr.length === 0) {
+      grid.innerHTML = '<div style="text-align:center;padding:20px;opacity:0.7;font-family:\'Inter\',sans-serif;">No cards of this rarity</div>';
+      return;
+    }
+    
+    arr.forEach(card => {
       const item = document.createElement('div');
-      item.style.cssText = 'display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid #222;position:relative;';
-      const power = Math.round(Number(copy.effective_power || 0));
+      item.style.cssText = 'display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid #222;position:relative;';
+      const maxQuantity = Math.min(card.quantity, reqCounts[r]);
       item.innerHTML = `
-        ${copy.image_url ? `<img src="${copy.image_url}" style="width:48px;height:auto;border-radius:6px;"/>` : ''}
+        ${card.image_url ? `<img src="${card.image_url}" style="width:48px;height:auto;border-radius:6px;"/>` : ''}
         <div style="flex:1;">
-          <div style="font-family:'Roboto Flex',sans-serif;font-weight:800;">${copy.name || `CARD #${copy.id_card}`}</div>
-          <div style="font-family:'Inter',sans-serif;opacity:.9;">Tickets: ${power}</div>
+          <div style="font-family:\'Roboto Flex\',sans-serif;font-weight:800;">${card.name || `CARD #${card.id_card}`}</div>
+          <div style="font-family:\'Inter\',sans-serif;opacity:.9;font-size:12px;">Tickets: ${card.start_bounty} | Available: ${card.quantity}</div>
         </div>
-        <div style="min-width:60px;display:flex;align-items:center;justify-content:center;">
-          <input type="checkbox" class="trade-copy-checkbox" data-item="${copy.id_item}">
+        <div style="min-width:120px;display:flex;align-items:center;gap:8px;">
+          <button class="trade-qty-btn trade-qty-minus" data-card="${card.id_card}" style="width:28px;height:28px;border-radius:6px;border:1px solid #444;background:#2a2a2a;color:#fff;cursor:pointer;font-weight:700;">−</button>
+          <input type="number" class="trade-qty-input" data-card="${card.id_card}" value="0" min="0" max="${maxQuantity}" style="width:40px;text-align:center;background:#1a1a1a;border:1px solid #444;border-radius:4px;color:#fff;padding:4px;font-family:\'Roboto Flex\',sans-serif;font-weight:700;" readonly>
+          <button class="trade-qty-btn trade-qty-plus" data-card="${card.id_card}" style="width:28px;height:28px;border-radius:6px;border:1px solid #444;background:#2a2a2a;color:#fff;cursor:pointer;font-weight:700;">+</button>
         </div>
       `;
       grid.appendChild(item);
     });
-    grid.querySelectorAll('.trade-copy-checkbox').forEach(chk => {
-      chk.addEventListener('change', () => {
-        const idItem = Number(chk.getAttribute('data-item'));
-        if (chk.checked) selectedItemIdsLocal.add(idItem); else selectedItemIdsLocal.delete(idItem);
-        updateSubmitState();
+    
+    // Обработчики для кнопок количества
+    grid.querySelectorAll('.trade-qty-plus').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const cardId = Number(btn.getAttribute('data-card'));
+        const input = grid.querySelector(`.trade-qty-input[data-card="${cardId}"]`);
+        const card = arr.find(c => c.id_card === cardId);
+        if (input && card) {
+          const current = parseInt(input.value) || 0;
+          const max = Math.min(card.quantity, reqCounts[r]);
+          if (current < max) {
+            input.value = current + 1;
+            selectedCardsLocal[cardId] = (selectedCardsLocal[cardId] || 0) + 1;
+            updateSubmitState();
+          }
+        }
       });
     });
+    
+    grid.querySelectorAll('.trade-qty-minus').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const cardId = Number(btn.getAttribute('data-card'));
+        const input = grid.querySelector(`.trade-qty-input[data-card="${cardId}"]`);
+        if (input) {
+          const current = parseInt(input.value) || 0;
+          if (current > 0) {
+            input.value = current - 1;
+            selectedCardsLocal[cardId] = (selectedCardsLocal[cardId] || 0) - 1;
+            if (selectedCardsLocal[cardId] <= 0) {
+              delete selectedCardsLocal[cardId];
+            }
+            updateSubmitState();
+          }
+        }
+      });
+    });
+    
     updateSubmitState();
   }
+  
   function updateSubmitState() {
     const needCount = reqCounts[active];
-    submitBtn.disabled = selectedItemIdsLocal.size !== needCount;
+    const totalSelected = Object.values(selectedCardsLocal).reduce((sum, qty) => sum + qty, 0);
+    submitBtn.disabled = totalSelected !== needCount;
   }
+  
   tabBtns.forEach(b => b.addEventListener('click', () => renderTrade(b.getAttribute('data-r'))));
   cancelBtn?.addEventListener('click', closeModal);
   submitBtn?.addEventListener('click', async () => {
     try {
       submitBtn.disabled = true;
       submitBtn.textContent = 'Processing...';
-      const selectedItemIds = Array.from(selectedItemIdsLocal.values());
+      
+      // Формируем массив карт для обмена: [{ id_card, quantity }, ...]
+      const cardsToTrade = Object.entries(selectedCardsLocal)
+        .filter(([_, qty]) => qty > 0)
+        .map(([id_card, quantity]) => ({ id_card: Number(id_card), quantity: Number(quantity) }));
+      
       const resp = await fetch('/api/cards/trade', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ wallet: currentWallet, selectedItemIds })
+        headers: { 
+          'Content-Type': 'application/json',
+          'X-Wallet': currentWallet,
+          'X-Signature': sessionStorage.getItem('signature') || '',
+          'X-Message': sessionStorage.getItem('message') || ''
+        },
+        body: JSON.stringify({ wallet: currentWallet, cards: cardsToTrade, rarity: active })
       });
       const d = await resp.json();
       if (d && d.success) {
         body.innerHTML = `
           <div class="modal-title">Trade complete</div>
           ${d.card?.image_url ? `<img class="modal-image" src="${d.card.image_url}" alt="card">` : ''}
-          <div style="font-family:'Inter',sans-serif;font-size:18px;opacity:.95;">You received a card: ${String(d.card?.rarity || '').toUpperCase()}</div>
+          <div style="font-family:'Inter',sans-serif;font-size:18px;opacity:.95;">You received a ${String(d.card?.rarity || '').toUpperCase()} card!</div>
           <div class="modal-actions"><button class="btn btn-primary" id="trade-ok">OK</button></div>
         `;
         document.getElementById('trade-ok')?.addEventListener('click', () => { closeModal(); loadUserCards(currentWallet); }, { once: true });
@@ -1535,7 +1607,8 @@ async function openTradeModal(requestedRarity) {
         showMessage(d?.error || 'Trade failed');
         submitBtn.disabled = false; submitBtn.textContent = 'Trade';
       }
-    } catch {
+    } catch (e) {
+      console.error('Trade error:', e);
       showMessage('Trade failed');
       submitBtn.disabled = false; submitBtn.textContent = 'Trade';
     }
