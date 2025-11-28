@@ -9,6 +9,11 @@ import json
 
 load_dotenv()
 
+# ВАЖНО: Устанавливаем переменную окружения ДО импорта модулей приложения
+# Это гарантирует, что приложение будет использовать тестовую БД lab_test
+# вместо основной БД lab. ОСНОВНАЯ БД lab НЕ БУДЕТ ЗАТРОНУТА ТЕСТАМИ!
+os.environ["POSTGRES_DB"] = "lab_test"
+
 # Тестовые данные
 TEST_WALLET = "TestWallet1234567890123456789012345678901234567890"
 TEST_WALLET_2 = "TestWallet9876543210987654321098765432109876543210"
@@ -17,6 +22,7 @@ TEST_MESSAGE = "Gamba Auth: 1234567890"
 @pytest.fixture(scope="session")
 def db_connection():
     try:
+        # Для тестов используем отдельную БД lab_test, чтобы не затронуть основную БД lab
         # Для локального запуска используем localhost, для Docker - db
         host = os.getenv("POSTGRES_HOST", "localhost")
         # Если host = "db", пробуем localhost для локального запуска
@@ -24,7 +30,7 @@ def db_connection():
             try:
                 conn = psycopg2.connect(
                     host="localhost",
-                    database=os.getenv("POSTGRES_DB", "lab"),
+                    database="lab_test",  # Используем тестовую БД
                     user=os.getenv("POSTGRES_USER", "admin"),
                     password=os.getenv("POSTGRES_PASSWORD", "12345"),
                     port=os.getenv("POSTGRES_PORT", "5432")
@@ -37,7 +43,7 @@ def db_connection():
         
         conn = psycopg2.connect(
             host=host,
-            database=os.getenv("POSTGRES_DB", "lab"),
+            database="lab_test",  # Используем тестовую БД
             user=os.getenv("POSTGRES_USER", "admin"),
             password=os.getenv("POSTGRES_PASSWORD", "12345"),
             port=os.getenv("POSTGRES_PORT", "5432")
