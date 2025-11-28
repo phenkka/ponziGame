@@ -58,7 +58,17 @@ def clean_db(db_connection):
         cursor.execute("DELETE FROM Card_User")
         cursor.execute("DELETE FROM Referral_system")
         cursor.execute("DELETE FROM Users")
-        # НЕ удаляем Cards и Chests - это статические справочные данные
+        # Удаляем тестовые карты (с image_key, начинающимся с 'TEST_')
+        # Сначала удаляем связанные записи в Card_User
+        cursor.execute("""
+            DELETE FROM Card_User
+            WHERE id_card IN (
+                SELECT id_card FROM Cards WHERE image_key LIKE 'TEST_%'
+            )
+        """)
+        # Затем удаляем сами тестовые карты
+        cursor.execute("DELETE FROM Cards WHERE image_key LIKE 'TEST_%'")
+        # НЕ удаляем оригинальные Cards и Chests - это статические справочные данные
         db_connection.commit()
     except Exception as e:
         db_connection.rollback()
@@ -87,6 +97,16 @@ def clean_db(db_connection):
                 LIMIT 5
             )
         """)
+        # Удаляем тестовые карты (с image_key, начинающимся с 'TEST_')
+        # Сначала удаляем связанные записи в Card_User
+        cursor.execute("""
+            DELETE FROM Card_User
+            WHERE id_card IN (
+                SELECT id_card FROM Cards WHERE image_key LIKE 'TEST_%'
+            )
+        """)
+        # Затем удаляем сами тестовые карты
+        cursor.execute("DELETE FROM Cards WHERE image_key LIKE 'TEST_%'")
         db_connection.commit()
     except Exception as e:
         db_connection.rollback()

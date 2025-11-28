@@ -8,6 +8,7 @@ import string
 import base58
 from nacl.signing import VerifyKey
 from nacl.exceptions import BadSignatureError
+import random
 
 load_dotenv()
 
@@ -412,4 +413,36 @@ def verify_solana_transaction(tx_signature: str, expected_sender: str, expected_
         print(f"Error type: {type(e).__name__}")
         print(f"Traceback: {traceback.format_exc()}")
         return {"valid": False, "error": f"Verification failed: {str(e)}"}
+
+
+def determine_card_rarity(prob_common: int, prob_rare: int, prob_epic: int, 
+                          prob_legendary: int, chance_loss: int) -> str:
+    # Генерируем случайное число от 1 до 100 (включительно)
+    roll = secrets.randbelow(100) + 1
+    
+    # Определяем редкость на основе вероятностей
+    if roll <= chance_loss:
+        return 'loss'
+    elif roll <= chance_loss + prob_common:
+        return 'basic'
+    elif roll <= chance_loss + prob_common + prob_rare:
+        return 'rare'
+    elif roll <= chance_loss + prob_common + prob_rare + prob_epic:
+        return 'epic'
+    else:
+        return 'legendary'
+
+
+def get_random_card_by_rarity(rarity: str, cursor) -> dict:
+    cursor.execute("""
+        SELECT id_card, rarity, start_bounty, name, image_url, image_key
+        FROM Cards
+        WHERE rarity = %s
+        AND image_url IS NOT NULL
+        AND image_url != ''
+        ORDER BY RANDOM()
+        LIMIT 1
+    """, (rarity,))
+    
+    return cursor.fetchone()
 

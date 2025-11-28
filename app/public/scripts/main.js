@@ -1130,10 +1130,14 @@ async function purchaseChest(idChest, chestsCache) {
       } catch (confirmError) {
         console.warn('Transaction confirmation error (non-critical):', confirmError);
       }
+      // Show notification that transaction is being verified
+      showMessage('Transaction confirmed! Please wait while we verify your purchase...', 'success');
       console.log('Sending purchase request to backend...');
       const res = await fetch('/api/chests/buy', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wallet: currentWallet, id_chest: Number(idChest), txSignature }) });
       const resp = await res.json();
       console.log('Backend response:', resp);
+      // Hide the verification message
+      hideMessage();
       if (resp.success) {
         showPurchaseModal(Number(idChest));
       } else {

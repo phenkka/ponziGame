@@ -5,7 +5,7 @@ import hashlib
 import json
 
 from core.models import AuthRequest
-from core.utils import get_db_connection, generate_ref_code, verify_solana_signature, verify_solana_transaction, HELIUS_RPC_URL
+from core.utils import get_db_connection, generate_ref_code, verify_solana_signature, verify_solana_transaction, HELIUS_RPC_URL, determine_card_rarity, get_random_card_by_rarity
 from core.auth import verify_auth
 from pydantic import BaseModel
 
@@ -625,6 +625,179 @@ def setup_api_routes(app):
             
         except Exception as e:
             print(f"Buy chest error: {e}")
+            import traceback
+            traceback.print_exc()
+            return JSONResponse(
+                status_code=500,
+                content={"success": False, "error": f"Internal error: {str(e)}"}
+            )
+    
+    @app.post("/api/chests/open")
+    async def open_chest(request: Request):
+        try:
+            # Получаем данные из запроса
+            body = await request.json()
+            wallet = body.get("wallet")
+            id_purchase = body.get("id_purchase")
+            
+            if not wallet or not id_purchase:
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "error": "Missing required fields: wallet, id_purchase"}
+                )
+            
+            # Проверяем авторизацию
+            x_wallet = request.headers.get("X-Wallet")
+            x_signature = request.headers.get("X-Signature")
+            x_message = request.headers.get("X-Message")
+            
+            if not x_wallet or not x_signature or not x_message:
+                auth_token = request.cookies.get("auth_token")
+                if auth_token:
+                    try:
+                        from core.sessions import verify_session_cookie
+                        auth_data = await verify_session_cookie(request)
+                        if auth_data["wallet"] != wallet:
+                            return JSONResponse(
+                                status_code=403,
+                                content={"success": False, "error": "Access denied"}
+                            )
+                    except Exception as e:
+                        return JSONResponse(
+                            status_code=401,
+                            content={"success": False, "error": "Invalid session"}
+                        )
+                else:
+                    return JSONResponse(
+                        status_code=401,
+                        content={"success": False, "error": "Authentication required"}
+                    )
+            else:
+                try:
+                    auth_data = await verify_auth(x_wallet=x_wallet, x_signature=x_signature, x_message=x_message)
+                    if auth_data["wallet"] != wallet:
+                        return JSONResponse(
+                            status_code=403,
+                            content={"success": False, "error": "Access denied"}
+                        )
+                except HTTPException as e:
+                    return JSONResponse(
+                        status_code=e.status_code,
+                        content={"success": False, "error": e.detail}
+                    )
+            
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            # Проверяем, что покупка существует и принадлежит пользователю
+            cursor.execute("""
+                SELECT cp.id_purchase, cp.id_user, cp.id_chest, cp.is_opened, cp.opened_at,
+                       u.wallet, c.prob_common, c.prob_rare, c.prob_epic, c.prob_legendary, c.chance_loss
+                FROM Chest_purchases cp
+                JOIN Users u ON cp.id_user = u.id_user
+                JOIN Chests c ON cp.id_chest = c.id_chest
+                WHERE cp.id_purchase = %s AND u.wallet = %s
+            """, (id_purchase, wallet))
+            
+            purchase_data = cursor.fetchone()
+            if not purchase_data:
+                cursor.close()
+                conn.close()
+                return JSONResponse(
+                    status_code=404,
+                    content={"success": False, "error": "Purchase not found or access denied"}
+                )
+            
+            # Проверяем, что пак еще не открыт
+            if purchase_data['is_opened']:
+                cursor.close()
+                conn.close()
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "error": "Pack already opened"}
+                )
+            
+            # Определяем редкость карты на основе вероятностей
+            rarity = determine_card_rarity(
+                prob_common=purchase_data['prob_common'],
+                prob_rare=purchase_data['prob_rare'],
+                prob_epic=purchase_data['prob_epic'],
+                prob_legendary=purchase_data['prob_legendary'],
+                chance_loss=purchase_data['chance_loss']
+            )
+            
+            # Если выпал loss, просто отмечаем пак как открытый
+            if rarity == 'loss':
+                cursor.execute("""
+                    UPDATE Chest_purchases
+                    SET is_opened = TRUE, opened_at = NOW()
+                    WHERE id_purchase = %s
+                """, (id_purchase,))
+                
+                # Записываем в Chest_openings
+                cursor.execute("""
+                    INSERT INTO Chest_openings (id_purchase, id_user, id_chest)
+                    VALUES (%s, %s, %s)
+                """, (id_purchase, purchase_data['id_user'], purchase_data['id_chest']))
+                
+                conn.commit()
+                cursor.close()
+                conn.close()
+                
+                return {
+                    "success": True,
+                    "lost": True,
+                    "rarity": None,
+                    "message": "Nothing dropped"
+                }
+            
+            # Получаем случайную карту с нужной редкостью
+            card = get_random_card_by_rarity(rarity, cursor)
+            if not card:
+                cursor.close()
+                conn.close()
+                return JSONResponse(
+                    status_code=500,
+                    content={"success": False, "error": f"No cards found with rarity: {rarity}"}
+                )
+            
+            # Добавляем карту пользователю (или увеличиваем quantity если уже есть)
+            cursor.execute("""
+                INSERT INTO Card_User (id_user, id_card, quantity)
+                VALUES (%s, %s, 1)
+                ON CONFLICT (id_user, id_card) 
+                DO UPDATE SET quantity = Card_User.quantity + 1
+            """, (purchase_data['id_user'], card['id_card']))
+            
+            # Отмечаем пак как открытый
+            cursor.execute("""
+                UPDATE Chest_purchases
+                SET is_opened = TRUE, opened_at = NOW()
+                WHERE id_purchase = %s
+            """, (id_purchase,))
+            
+            # Записываем в Chest_openings
+            cursor.execute("""
+                INSERT INTO Chest_openings (id_purchase, id_user, id_chest)
+                VALUES (%s, %s, %s)
+            """, (id_purchase, purchase_data['id_user'], purchase_data['id_chest']))
+            
+            conn.commit()
+            cursor.close()
+            conn.close()
+            
+            return {
+                "success": True,
+                "lost": False,
+                "rarity": rarity,
+                "card_id": card['id_card'],
+                "card_name": card.get('name', ''),
+                "image_url": card.get('image_url', ''),
+                "start_bounty": card['start_bounty']
+            }
+            
+        except Exception as e:
+            print(f"Open chest error: {e}")
             import traceback
             traceback.print_exc()
             return JSONResponse(
