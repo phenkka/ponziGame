@@ -10,6 +10,7 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./db/init.sql:/docker-entrypoint-initdb.d/01_init.sql
       - ./db/insert.sql:/docker-entrypoint-initdb.d/02_inserts.sql
+      - ./db/03_init_test_db.sh:/docker-entrypoint-initdb.d/03_init_test_db.sh
     ports:
       - "5432:5432"
     networks:
