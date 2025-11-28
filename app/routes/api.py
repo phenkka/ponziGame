@@ -5,7 +5,7 @@ import hashlib
 import json
 
 from core.models import AuthRequest
-from core.utils import get_db_connection, generate_ref_code, verify_solana_signature, verify_solana_transaction, HELIUS_RPC_URL, determine_card_rarity, get_random_card_by_rarity
+from core.utils import get_db_connection, generate_ref_code, verify_solana_signature, verify_solana_transaction, HELIUS_RPC_URL, determine_card_rarity, get_random_card_by_rarity, get_or_create_active_round, add_to_jackpot, draw_jackpot
 from core.auth import verify_auth
 from pydantic import BaseModel
 
@@ -201,19 +201,119 @@ def setup_api_routes(app):
     
     @app.get("/api/jackpot")
     async def get_jackpot():
-        return {
-            "success": True,
-            "amount": 0,
-            "timeLeft": 86400  # 24 часа в секундах
-        }
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            # Получаем или создаем активный раунд
+            round_data = get_or_create_active_round(cursor, conn)
+            
+            # Вычисляем оставшееся время
+            from datetime import datetime
+            now = datetime.now()
+            ends_at = round_data['ends_at']
+            if isinstance(ends_at, str):
+                # Парсим строку в datetime
+                try:
+                    ends_at = datetime.fromisoformat(ends_at.replace('Z', '+00:00'))
+                except:
+                    # Fallback для других форматов
+                    from datetime import datetime as dt
+                    ends_at = dt.strptime(ends_at, '%Y-%m-%d %H:%M:%S.%f')
+            
+            time_left = max(0, int((ends_at - now).total_seconds()))
+            
+            cursor.close()
+            conn.close()
+            
+            return {
+                "success": True,
+                "jackpot": float(round_data['total_amount']),
+                "amount": float(round_data['total_amount']),
+                "timeLeft": time_left,
+                "endsAt": ends_at.isoformat() if hasattr(ends_at, 'isoformat') else str(ends_at)
+            }
+        except Exception as e:
+            print(f"Get jackpot error: {e}")
+            import traceback
+            traceback.print_exc()
+            return {
+                "success": False,
+                "error": str(e),
+                "jackpot": 0,
+                "amount": 0,
+                "timeLeft": 86400
+            }
     
     @app.get("/api/jackpot/last")
     async def get_last_jackpot():
-        return {
-            "success": True,
-            "amount": 0,
-            "winner": None
-        }
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            # Получаем последний завершенный раунд
+            cursor.execute("""
+                SELECT jr.*, u.wallet
+                FROM Jackpot_rounds jr
+                LEFT JOIN Users u ON jr.winner_user_id = u.id_user
+                WHERE jr.status = 'completed'
+                ORDER BY jr.completed_at DESC
+                LIMIT 1
+            """)
+            last_round = cursor.fetchone()
+            
+            cursor.close()
+            conn.close()
+            
+            if last_round:
+                return {
+                    "success": True,
+                    "lastJackpot": {
+                        "amount": float(last_round['prize_amount']) if last_round['prize_amount'] else 0.0,
+                        "winner": last_round['wallet'] if last_round['wallet'] else None,
+                        "date": str(last_round['completed_at']) if last_round['completed_at'] else None
+                    }
+                }
+            else:
+                return {
+                    "success": True,
+                    "lastJackpot": None
+                }
+        except Exception as e:
+            print(f"Get last jackpot error: {e}")
+            import traceback
+            traceback.print_exc()
+            return {
+                "success": False,
+                "error": str(e),
+                "lastJackpot": None
+            }
+    
+    @app.post("/api/jackpot/draw")
+    async def draw_jackpot_endpoint():
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            drawn_rounds = draw_jackpot(cursor, conn)
+            
+            cursor.close()
+            conn.close()
+            
+            return {
+                "success": True,
+                "drawn_rounds": drawn_rounds,
+                "message": f"Processed {len(drawn_rounds)} round(s)"
+            }
+        except Exception as e:
+            print(f"Draw jackpot error: {e}")
+            import traceback
+            traceback.print_exc()
+            return {
+                "success": False,
+                "error": str(e),
+                "drawn_rounds": []
+            }
     
     @app.get("/api/chests")
     async def get_chests():
@@ -612,6 +712,11 @@ def setup_api_routes(app):
             """, (user['id_user'], id_chest, tx_signature))
             
             purchase = cursor.fetchone()
+            
+            # Добавляем 10% от цены пака в джекпот
+            jackpot_contribution = float(chest['price']) * 0.1
+            add_to_jackpot(cursor, conn, jackpot_contribution)
+            
             conn.commit()
             
             cursor.close()

@@ -57,6 +57,8 @@ def clean_db(db_connection):
         cursor.execute("DELETE FROM Chest_purchases")
         cursor.execute("DELETE FROM Card_User")
         cursor.execute("DELETE FROM Referral_system")
+        cursor.execute("DELETE FROM Jackpot_tickets_snapshot")  # Очищаем snapshot tickets
+        cursor.execute("DELETE FROM Jackpot_rounds")  # Очищаем раунды джекпота
         cursor.execute("DELETE FROM Users")
         # Удаляем тестовые карты (с image_key, начинающимся с 'TEST_')
         # Сначала удаляем связанные записи в Card_User
@@ -85,6 +87,8 @@ def clean_db(db_connection):
         cursor.execute("DELETE FROM Chest_purchases")
         cursor.execute("DELETE FROM Card_User")
         cursor.execute("DELETE FROM Referral_system")
+        cursor.execute("DELETE FROM Jackpot_tickets_snapshot")  # Очищаем snapshot tickets
+        cursor.execute("DELETE FROM Jackpot_rounds")  # Очищаем раунды джекпота
         cursor.execute("DELETE FROM Users")
         # Удаляем тестовые паки - дубликаты по параметрам (оставляем только первые 5 оригинальных)
         # Удаляем все паки, кроме первых 5 (оригинальные из insert.sql)

@@ -63,3 +63,25 @@ create table if not exists Chest_openings(
     id_chest int not null references Chests(id_chest),
     opened_at date default current_date
 );
+
+create table if not exists Jackpot_rounds(
+    id_round serial primary key,
+    started_at timestamp default now(),
+    ends_at timestamp not null,
+    winner_user_id bigint null references Users(id_user),
+    prize numeric(20,8) null,
+    status text default 'active' check (status in ('active', 'completed')),
+    completed_at timestamp null,
+    prize_amount numeric(20,8) null,
+    total_amount numeric(20,8) default 0 not null,
+    tickets_snapshot jsonb null  -- Снимок tickets на момент окончания раунда
+);
+
+create table if not exists Jackpot_tickets_snapshot(
+    id_snapshot bigserial primary key,
+    id_round int not null references Jackpot_rounds(id_round) on delete cascade,
+    id_user bigint not null references Users(id_user) on delete cascade,
+    tickets_count int not null,
+    created_at timestamp default now(),
+    unique(id_round, id_user)
+);

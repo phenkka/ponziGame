@@ -446,3 +446,284 @@ def get_random_card_by_rarity(rarity: str, cursor) -> dict:
     
     return cursor.fetchone()
 
+
+def get_user_tickets(cursor, user_id: int) -> int:
+    """Подсчитывает общее количество tickets пользователя из всех его карт"""
+    cursor.execute("""
+        SELECT COALESCE(SUM(cu.quantity * c.start_bounty), 0) as total_tickets
+        FROM Card_User cu
+        JOIN Cards c ON cu.id_card = c.id_card
+        WHERE cu.id_user = %s
+    """, (user_id,))
+    result = cursor.fetchone()
+    return int(result["total_tickets"]) if result and result["total_tickets"] else 0
+
+
+def get_or_create_active_round(cursor, conn) -> dict:
+    from datetime import datetime, timedelta
+    
+    # Проверяем активный раунд
+    cursor.execute("""
+        SELECT * FROM Jackpot_rounds 
+        WHERE status = 'active' 
+        ORDER BY id_round DESC 
+        LIMIT 1
+    """)
+    active_round = cursor.fetchone()
+    
+    now = datetime.now()
+    
+    # Если есть активный раунд, проверяем не истек ли он
+    if active_round:
+        ends_at = active_round['ends_at']
+        # Если ends_at - это строка, конвертируем в datetime
+        if isinstance(ends_at, str):
+            try:
+                ends_at = datetime.fromisoformat(ends_at.replace('Z', '+00:00'))
+            except:
+                from datetime import datetime as dt
+                try:
+                    ends_at = dt.strptime(ends_at, '%Y-%m-%d %H:%M:%S.%f')
+                except:
+                    ends_at = dt.strptime(ends_at, '%Y-%m-%d %H:%M:%S')
+        
+        # Если раунд не истек, возвращаем его
+        if ends_at > now:
+            return active_round
+        
+        # Если активный раунд истек, сохраняем snapshot tickets и завершаем его
+        save_tickets_snapshot(cursor, conn, active_round['id_round'], active_round['ends_at'])
+        complete_expired_round(cursor, conn, active_round['id_round'])
+    
+    # Создаем новый раунд
+    ends_at = now + timedelta(hours=24)
+    cursor.execute("""
+        INSERT INTO Jackpot_rounds (started_at, ends_at, status, total_amount)
+        VALUES (%s, %s, 'active', 0)
+        RETURNING *
+    """, (now, ends_at))
+    new_round = cursor.fetchone()
+    conn.commit()
+    return new_round
+
+
+def save_tickets_snapshot(cursor, conn, round_id: int, snapshot_time):
+    # Получаем всех пользователей с их tickets на момент snapshot_time
+    # Используем только карты, которые были получены ДО окончания раунда
+    # created_at в Card_User это date, а snapshot_time это timestamp, поэтому сравниваем даты
+    from datetime import datetime
+    if isinstance(snapshot_time, str):
+        snapshot_time = datetime.fromisoformat(snapshot_time.replace('Z', '+00:00'))
+    snapshot_date = snapshot_time.date() if isinstance(snapshot_time, datetime) else snapshot_time
+    
+    cursor.execute("""
+        SELECT u.id_user, u.wallet,
+               COALESCE(SUM(cu.quantity * c.start_bounty), 0) as total_tickets
+        FROM Users u
+        INNER JOIN Card_User cu ON u.id_user = cu.id_user
+        INNER JOIN Cards c ON cu.id_card = c.id_card
+        WHERE cu.created_at IS NULL OR cu.created_at <= %s
+        GROUP BY u.id_user, u.wallet
+        HAVING COALESCE(SUM(cu.quantity * c.start_bounty), 0) > 0
+    """, (snapshot_date,))
+    participants = cursor.fetchall()
+    
+    # Сохраняем snapshot в таблицу
+    for participant in participants:
+        cursor.execute("""
+            INSERT INTO Jackpot_tickets_snapshot (id_round, id_user, tickets_count)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (id_round, id_user) DO UPDATE SET tickets_count = EXCLUDED.tickets_count
+        """, (round_id, participant['id_user'], int(participant['total_tickets'])))
+    
+    conn.commit()
+
+
+def complete_expired_round(cursor, conn, round_id: int):
+    # Получаем информацию о раунде для ends_at
+    cursor.execute("SELECT ends_at FROM Jackpot_rounds WHERE id_round = %s", (round_id,))
+    round_info = cursor.fetchone()
+    if not round_info:
+        return  # Раунд не найден
+    
+    ends_at = round_info['ends_at']
+    # Конвертируем ends_at в правильный формат
+    from datetime import datetime
+    if isinstance(ends_at, str):
+        try:
+            ends_at = datetime.fromisoformat(ends_at.replace('Z', '+00:00'))
+        except:
+            from datetime import datetime as dt
+            try:
+                ends_at = dt.strptime(ends_at, '%Y-%m-%d %H:%M:%S.%f')
+            except:
+                ends_at = dt.strptime(ends_at, '%Y-%m-%d %H:%M:%S')
+    
+    # Проверяем, есть ли уже snapshot, если нет - сохраняем
+    cursor.execute("SELECT COUNT(*) as cnt FROM Jackpot_tickets_snapshot WHERE id_round = %s", (round_id,))
+    snapshot_result = cursor.fetchone()
+    snapshot_exists = snapshot_result['cnt'] > 0 if snapshot_result and 'cnt' in snapshot_result else False
+    if not snapshot_exists:
+        save_tickets_snapshot(cursor, conn, round_id, ends_at)
+    
+    # Используем сохраненный snapshot tickets, а не текущее состояние
+    cursor.execute("""
+        SELECT u.id_user, u.wallet, jts.tickets_count as total_tickets
+        FROM Jackpot_tickets_snapshot jts
+        JOIN Users u ON jts.id_user = u.id_user
+        WHERE jts.id_round = %s AND jts.tickets_count > 0
+    """, (round_id,))
+    participants = cursor.fetchall()
+    
+    winner_user_id = None
+    prize_amount = None
+    
+    if participants:
+        # Выбираем победителя на основе tickets (вероятность пропорциональна количеству tickets)
+        total_tickets = sum(int(p['total_tickets']) for p in participants)
+        if total_tickets > 0:
+            import secrets
+            winning_ticket = secrets.randbelow(total_tickets) + 1
+            
+            current_ticket = 0
+            for participant in participants:
+                current_ticket += int(participant['total_tickets'])
+                if current_ticket >= winning_ticket:
+                    winner_user_id = participant['id_user']
+                    break
+    
+    # Получаем сумму джекпота
+    cursor.execute("SELECT total_amount FROM Jackpot_rounds WHERE id_round = %s", (round_id,))
+    round_data = cursor.fetchone()
+    total_amount = float(round_data['total_amount']) if round_data else 0.0
+    
+    # Приз = 10% от total_amount
+    prize_amount = total_amount * 0.1 if total_amount > 0 else 0.0
+    
+    # Обновляем раунд
+    from datetime import datetime
+    cursor.execute("""
+        UPDATE Jackpot_rounds
+        SET status = 'completed',
+            winner_user_id = %s,
+            prize_amount = %s,
+            completed_at = %s
+        WHERE id_round = %s
+    """, (winner_user_id, prize_amount, datetime.now(), round_id))
+    conn.commit()
+
+
+def add_to_jackpot(cursor, conn, amount: float):
+    round_data = get_or_create_active_round(cursor, conn)
+    round_id = round_data['id_round']
+    
+    cursor.execute("""
+        UPDATE Jackpot_rounds
+        SET total_amount = total_amount + %s
+        WHERE id_round = %s
+    """, (amount, round_id))
+    conn.commit()
+
+
+def draw_jackpot(cursor, conn):
+    from datetime import datetime
+    
+    now = datetime.now()
+    
+    # Находим все истекшие активные раунды
+    cursor.execute("""
+        SELECT * FROM Jackpot_rounds 
+        WHERE status = 'active' AND ends_at <= %s
+        ORDER BY id_round ASC
+    """, (now,))
+    expired_rounds = cursor.fetchall()
+    
+    drawn_rounds = []
+    
+    for round_data in expired_rounds:
+        round_id = round_data['id_round']
+        ends_at = round_data['ends_at']
+        
+        # Сохраняем snapshot tickets на момент окончания раунда (если еще не сохранен)
+        cursor.execute("SELECT COUNT(*) as cnt FROM Jackpot_tickets_snapshot WHERE id_round = %s", (round_id,))
+        snapshot_result = cursor.fetchone()
+        snapshot_exists = snapshot_result['cnt'] > 0 if snapshot_result and 'cnt' in snapshot_result else False
+        if not snapshot_exists:
+            # Конвертируем ends_at в правильный формат
+            if isinstance(ends_at, str):
+                from datetime import datetime
+                try:
+                    ends_at = datetime.fromisoformat(ends_at.replace('Z', '+00:00'))
+                except:
+                    from datetime import datetime as dt
+                    try:
+                        ends_at = dt.strptime(ends_at, '%Y-%m-%d %H:%M:%S.%f')
+                    except:
+                        ends_at = dt.strptime(ends_at, '%Y-%m-%d %H:%M:%S')
+            save_tickets_snapshot(cursor, conn, round_id, ends_at)
+        
+        # Используем сохраненный snapshot tickets, а не текущее состояние
+        cursor.execute("""
+            SELECT u.id_user, u.wallet, jts.tickets_count as total_tickets
+            FROM Jackpot_tickets_snapshot jts
+            JOIN Users u ON jts.id_user = u.id_user
+            WHERE jts.id_round = %s AND jts.tickets_count > 0
+        """, (round_id,))
+        participants = cursor.fetchall()
+        
+        winner_user_id = None
+        winner_wallet = None
+        prize_amount = None
+        total_tickets = 0
+        
+        if participants:
+            # Выбираем победителя на основе tickets
+            total_tickets = sum(int(p['total_tickets']) for p in participants)
+            if total_tickets > 0:
+                import secrets
+                winning_ticket = secrets.randbelow(total_tickets) + 1
+                
+                current_ticket = 0
+                for participant in participants:
+                    current_ticket += int(participant['total_tickets'])
+                    if current_ticket >= winning_ticket:
+                        winner_user_id = participant['id_user']
+                        winner_wallet = participant['wallet']
+                        break
+        
+        # Приз = 10% от total_amount
+        total_amount = float(round_data['total_amount']) if round_data['total_amount'] else 0.0
+        prize_amount = total_amount * 0.1 if total_amount > 0 else 0.0
+        
+        # Обновляем раунд
+        cursor.execute("""
+            UPDATE Jackpot_rounds
+            SET status = 'completed',
+                winner_user_id = %s,
+                prize_amount = %s,
+                completed_at = %s
+            WHERE id_round = %s
+        """, (winner_user_id, prize_amount, now, round_id))
+        
+        drawn_rounds.append({
+            "round_id": round_id,
+            "prize": prize_amount,
+            "winner": winner_wallet,
+            "tickets": total_tickets
+        })
+    
+    conn.commit()
+    
+    # Создаем новый активный раунд, если нет активного
+    cursor.execute("SELECT * FROM Jackpot_rounds WHERE status = 'active' LIMIT 1")
+    if not cursor.fetchone():
+        from datetime import timedelta
+        ends_at = now + timedelta(hours=24)
+        cursor.execute("""
+            INSERT INTO Jackpot_rounds (started_at, ends_at, status, total_amount)
+            VALUES (%s, %s, 'active', 0)
+        """, (now, ends_at))
+        conn.commit()
+    
+    return drawn_rounds
+
