@@ -220,7 +220,7 @@ class TestBalanceAPI:
             assert "amount" in data["balance"]
             assert "decimals" in data["balance"]
             assert "symbol" in data["balance"]
-            assert data["balance"]["symbol"] == "TIRED"
+            assert data["balance"]["symbol"] == "TOKENS"
 
 
 class TestUserCardsAPI:

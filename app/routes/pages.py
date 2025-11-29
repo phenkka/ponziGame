@@ -27,9 +27,10 @@ def setup_page_routes(app):
     async def cards_page(request: Request, auth: dict = Depends(verify_session_cookie)):
         return FileResponse("public/cards.html")
     
-    @app.get("/profile")
-    async def profile_page(request: Request, auth: dict = Depends(verify_session_cookie)):
-        return FileResponse("public/referral.html")
+    # Profile page disabled
+    # @app.get("/profile")
+    # async def profile_page(request: Request, auth: dict = Depends(verify_session_cookie)):
+    #     return FileResponse("public/referral.html")
     
     @app.get("/rules")
     async def rules_page(request: Request, auth: dict = Depends(verify_session_cookie)):

@@ -448,7 +448,7 @@ def setup_api_routes(app):
             "balance": {
                 "amount": 0,
                 "decimals": 9,
-                "symbol": "TIRED"
+                "symbol": "TOKENS"
             }
         }
     
@@ -575,7 +575,7 @@ def setup_api_routes(app):
             "success": True,
             "rpcUrl": rpc_url,  # Используем Helius RPC
             "merchant": merchant if merchant else "11111111111111111111111111111111",
-            "mint": mint  # Адрес токена TIRED
+            "mint": mint  # Адрес токена TOKENS
         }
     
     @app.get("/api/super-jackpot")

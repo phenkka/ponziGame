@@ -39,7 +39,7 @@
                     <div class="user-dropdown-content" id="userDropdownContent">
                         <div class="dropdown-balance">
                             <span class="balance-label">Balance:</span>
-                            <span class="balance-amount" id="balance">0.0000 TIRED</span>
+                            <span class="balance-amount" id="balance">0.0000 TOKENS</span>
                         </div>
                         <div class="dropdown-actions">
                             <button class="dropdown-logout-button" id="logoutButton">LOG OUT</button>
@@ -68,7 +68,7 @@
                 <div class="dynamic-menu-overlay"></div>
                 <nav class="dynamic-menu">
                     <div class="dynamic-menu-header">
-                        <div class="shop-brand">$TIRED</div>
+                        <div class="shop-brand">$TOKENS</div>
                     </div>
                     <div class="dynamic-menu-items">
                         <a href="/shop" class="dynamic-menu-item" data-page="shop">
@@ -83,10 +83,11 @@
                             <img src="img/menu/battle.png" alt="Battle" class="menu-icon">
                             <span class="menu-text">battle</span>
                         </a>
-                        <a href="/profile" class="dynamic-menu-item active" data-page="profile">
+                        <!-- Profile page disabled temporarily -->
+                        <!-- <a href="/profile" class="dynamic-menu-item active" data-page="profile">
                             <img src="img/menu/profile.png" alt="Profile" class="menu-icon">
                             <span class="menu-text">profile</span>
-                        </a>
+                        </a> -->
                         <a href="/rules" class="dynamic-menu-item" data-page="rules">
                             <img src="img/menu/rules.png" alt="Rules" class="menu-icon">
                             <span class="menu-text">rules</span>
@@ -117,7 +118,7 @@
                                     </div>
                                     <div class="last-prize-section">
                                         <div class="last-subtitle">Prize pool:</div>
-                                        <div class="last-amount" id="lastj-amount-ref">0 $TIRED</div>
+                                        <div class="last-amount" id="lastj-amount-ref">0 $TOKENS</div>
                                     </div>
                                     <div class="last-winner-section" id="lastj-winner-ref" style="display: none;">
                                         <div class="winner-wallet" style="color: #6E6BFF; font-size: 24px;">
@@ -131,7 +132,7 @@
                             <div class="jackpot-carousel-item">
                                 <div class="super-jackpot-card">
                                     <div class="super-jackpot-title">SUPER JACKPOT</div>
-                                    <div class="super-jackpot-amount" id="superj-amount-ref">0 $TIRED</div>
+                                    <div class="super-jackpot-amount" id="superj-amount-ref">0 $TOKENS</div>
                                     <div class="super-jackpot-description">Collect all cards to win!</div>
                                 </div>
                             </div>
@@ -152,11 +153,11 @@
                             </div>
                             <div class="ref-stat">
                                 <span class="ref-stat-label">My rewards:</span>
-                                <span id="ref-rewards" class="ref-stat-value">0 $TIRED</span>
+                                <span id="ref-rewards" class="ref-stat-value">0 $TOKENS</span>
                             </div>
                         </div>
                         <div class="ref-claim">
-                            <button id="ref-claim-btn" class="ref-claim-btn">CLAIM $TIRED</button>
+                            <button id="ref-claim-btn" class="ref-claim-btn">CLAIM $TOKENS</button>
                         </div>
                     </section>
 
@@ -171,19 +172,19 @@
                         <div class="cashback-stats">
                             <div class="cashback-stat">
                                 <span class="cashback-stat-label">Total spent:</span>
-                                <span id="cashback-spent" class="cashback-stat-value">0 $TIRED</span>
+                                <span id="cashback-spent" class="cashback-stat-value">0 $TOKENS</span>
                             </div>
                             <div class="cashback-stat">
                                 <span class="cashback-stat-label">Total earned:</span>
-                                <span id="cashback-earned" class="cashback-stat-value">0 $TIRED</span>
+                                <span id="cashback-earned" class="cashback-stat-value">0 $TOKENS</span>
                             </div>
                             <div class="cashback-stat">
                                 <span class="cashback-stat-label">Already claimed:</span>
-                                <span id="cashback-claimed" class="cashback-stat-value">0 $TIRED</span>
+                                <span id="cashback-claimed" class="cashback-stat-value">0 $TOKENS</span>
                             </div>
                             <div class="cashback-stat">
                                 <span class="cashback-stat-label">Available to claim:</span>
-                                <span id="cashback-pending" class="cashback-stat-value">0 $TIRED</span>
+                                <span id="cashback-pending" class="cashback-stat-value">0 $TOKENS</span>
                             </div>
                         </div>
                         <div class="cashback-claim">

@@ -197,9 +197,9 @@ async function loadBalance(wallet) {
     const response = await fetch(`/api/balance/${wallet}`);
         const data = await response.json();
         if (data.success) {
-      const balance = data.balance || { amount: 0, decimals: 0, symbol: 'TIRED' };
+      const balance = data.balance || { amount: 0, decimals: 0, symbol: 'TOKENS' };
       const amount = Number(balance.amount || 0);
-      const symbol = balance.symbol || 'TIRED';
+      const symbol = balance.symbol || 'TOKENS';
       const text = `${amount.toFixed(4)} ${symbol}`;
       const balEl = document.getElementById('balance');
       const infoEl = document.getElementById('balance-info');
@@ -209,8 +209,8 @@ async function loadBalance(wallet) {
   } catch {
     const balEl = document.getElementById('balance');
     const infoEl = document.getElementById('balance-info');
-    if (balEl) balEl.textContent = '0.0000 TIRED';
-    if (infoEl) infoEl.textContent = '0.0000 TIRED';
+    if (balEl) balEl.textContent = '0.0000 TOKENS';
+    if (infoEl) infoEl.textContent = '0.0000 TOKENS';
   }
 }
 
@@ -559,9 +559,10 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'battle':
         window.location.href = '/battle';
         break;
-        case 'profile':
-        window.location.href = '/profile';
-        break;
+      // Profile page disabled temporarily
+      // case 'profile':
+      //   window.location.href = '/profile';
+      //   break;
       case 'rules':
         window.location.href = '/rules';
         break;
@@ -626,7 +627,7 @@ async function loadJackpot() {
     const r = await fetch('/api/jackpot');
     const data = await r.json();
     if (data && data.success) {
-      const amountText = `${data.jackpot} $TIRED`;
+      const amountText = `${data.jackpot} $TOKENS`;
       const timerElHome = document.getElementById('rtj-timer');
       const timerElShop = document.getElementById('rtj-timer-shop');
       const timerElRules = document.getElementById('rtj-timer-rules');
@@ -652,7 +653,7 @@ async function loadJackpot() {
       const lastJackpotData = await lastJackpotRes.json();
       console.log('Last jackpot data:', lastJackpotData);
       
-      let lastAmountText = '0 $TIRED';
+      let lastAmountText = '0 $TOKENS';
       let lastDateText = '-';
       
       if (lastJackpotData && lastJackpotData.success && lastJackpotData.lastJackpot) {
@@ -660,7 +661,7 @@ async function loadJackpot() {
         // Prize/amount fallback handling
         const lj = lastJackpotData.lastJackpot;
         const prizeVal = lj.prize ?? lj.amount ?? lj.value ?? 0;
-        lastAmountText = `${Math.round(prizeVal)} $TIRED`;
+        lastAmountText = `${Math.round(prizeVal)} $TOKENS`;
         const date = new Date(lastJackpotData.lastJackpot.date);
         lastDateText = date.toLocaleDateString('ru-RU', { 
           day: '2-digit', 
@@ -833,7 +834,7 @@ async function loadReferral() {
     const cntEl = document.getElementById('ref-count');
     if (cntEl) cntEl.textContent = String(d.referrals || 0);
     const rewEl = document.getElementById('ref-rewards');
-    if (rewEl) rewEl.textContent = `${Number(d.pending || 0).toString()} $TIRED`;
+    if (rewEl) rewEl.textContent = `${Number(d.pending || 0).toString()} $TOKENS`;
 
     const copyBtn = document.getElementById('ref-copy');
     if (copyBtn) copyBtn.onclick = async () => { try { await navigator.clipboard.writeText(link); showMessage('Referral link copied!', 'success'); } catch {} };
@@ -845,10 +846,10 @@ async function loadReferral() {
         claimBtn.textContent = 'Claiming...';
         const resp = await fetch('/api/referral/claim', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wallet }) });
         const j = await resp.json();
-        if (j && j.success) { showMessage(`Claimed ${j.amount} TIRED`, 'success'); loadReferral(); }
+        if (j && j.success) { showMessage(`Claimed ${j.amount} TOKENS`, 'success'); loadReferral(); }
         else showMessage(j.error || 'Claim failed');
       } catch (e) { showMessage('Claim failed'); }
-      finally { claimBtn.disabled = false; claimBtn.textContent = 'CLAIM $TIRED'; }
+      finally { claimBtn.disabled = false; claimBtn.textContent = 'CLAIM $TOKENS'; }
     };
     
     // Also load cashback data when loading referral data
@@ -866,16 +867,16 @@ async function loadCashback() {
     
     // Update cashback stats
     const spentEl = document.getElementById('cashback-spent');
-    if (spentEl) spentEl.textContent = `${Number(d.totalSpent || 0).toFixed(2)} $TIRED`;
+    if (spentEl) spentEl.textContent = `${Number(d.totalSpent || 0).toFixed(2)} $TOKENS`;
     
     const earnedEl = document.getElementById('cashback-earned');
-    if (earnedEl) earnedEl.textContent = `${Number(d.totalEarned || 0).toFixed(2)} $TIRED`;
+    if (earnedEl) earnedEl.textContent = `${Number(d.totalEarned || 0).toFixed(2)} $TOKENS`;
     
     const claimedEl = document.getElementById('cashback-claimed');
-    if (claimedEl) claimedEl.textContent = `${Number(d.claimed || 0).toFixed(2)} $TIRED`;
+    if (claimedEl) claimedEl.textContent = `${Number(d.claimed || 0).toFixed(2)} $TOKENS`;
     
     const pendingEl = document.getElementById('cashback-pending');
-    if (pendingEl) pendingEl.textContent = `${Number(d.pending || 0).toFixed(2)} $TIRED`;
+    if (pendingEl) pendingEl.textContent = `${Number(d.pending || 0).toFixed(2)} $TOKENS`;
 
     const claimBtn = document.getElementById('cashback-claim-btn');
     if (claimBtn) {
@@ -891,7 +892,7 @@ async function loadCashback() {
           });
           const j = await resp.json();
           if (j && j.success) { 
-            showMessage(`Claimed ${j.amount} TIRED cashback`, 'success'); 
+            showMessage(`Claimed ${j.amount} TOKENS cashback`, 'success'); 
             loadCashback(); 
           } else if (j && j.cooldown) {
             // Show human-readable remaining time and set temporary disabled state
@@ -934,7 +935,7 @@ async function loadSuperJackpot() {
     if (data && data.success) {
       // API возвращает amount, а не superJackpot
       const amount = data.amount || 0;
-      const amountText = `${parseFloat(amount).toFixed(2)} $TIRED`;
+      const amountText = `${Math.round(parseFloat(amount))} $TOKENS`;
       console.log('Super jackpot amount text:', amountText);
       
       // Update all super jackpot amount elements (как у обычного джекпота)
@@ -971,7 +972,7 @@ async function loadSuperJackpot() {
         document.getElementById('superj-amount-rules')
       ];
       amountEls.forEach(el => {
-        if (el) el.textContent = '0.00 $TIRED';
+        if (el) el.textContent = '0 $TOKENS';
       });
     }
   } catch (e) {
@@ -986,7 +987,7 @@ async function loadSuperJackpot() {
       document.getElementById('superj-amount-rules')
     ];
     amountEls.forEach(el => {
-      if (el) el.textContent = '0.00 $TIRED';
+      if (el) el.textContent = '0 $TOKENS';
     });
   }
 }
@@ -995,7 +996,7 @@ async function drawJackpot() {
   try {
     const r = await fetch('/api/jackpot/draw', { method: 'POST' });
     const data = await r.json();
-    if (data && data.success) showMessage(`Raffle finished! Winner: #${data.winnerUserId}, prize: ${data.prize} TIRED`, 'success');
+    if (data && data.success) showMessage(`Raffle finished! Winner: #${data.winnerUserId}, prize: ${data.prize} TOKENS`, 'success');
   } catch (e) { console.error('drawJackpot error', e); }
 }
 
@@ -1049,7 +1050,7 @@ async function loadPacks(forShop = false) {
         <img src="img/${packImage}" alt="Pack ${chest.id_chest}" class="pack-image">
         <div class="pack-card">
           <div class="pack-name">${getPackLabel(chest.id_chest)}</div>
-          <div class="pack-price">PRICE: ${Number(chest.price).toString()} $TIRED</div>
+          <div class="pack-price">PRICE: ${Number(chest.price).toString()} $TOKENS</div>
           <div class="pack-rates">CARD DROP RATES: Common: ${chest.prob_common}%; Rare: ${chest.prob_rare}%; Epic: ${chest.prob_epic}%; Legendary: ${chest.prob_legendary}%${chest.chance_loss > 0 ? `; Loss: ${chest.chance_loss}%` : ''}</div>
           <div class="pack-quantity-selector">
             <div class="quantity-controls">
@@ -1057,7 +1058,7 @@ async function loadPacks(forShop = false) {
               <input type="number" class="quantity-input" data-id="${chest.id_chest}" value="1" min="1" max="100" readonly>
               <button class="quantity-btn quantity-plus" data-id="${chest.id_chest}" aria-label="Increase quantity">+</button>
             </div>
-            <div class="quantity-total" data-id="${chest.id_chest}">Total: ${Number(chest.price).toString()} $TIRED</div>
+            <div class="quantity-total" data-id="${chest.id_chest}">Total: ${Number(chest.price).toString()} $TOKENS</div>
           </div>
           <button class="pack-buy-btn" data-id="${chest.id_chest}">${currentWallet ? 'Buy' : 'Connect Phantom wallet'}</button>
         </div>
@@ -1125,7 +1126,7 @@ function updateQuantityTotal(id, price, container) {
   if (input && totalEl) {
     const quantity = parseInt(input.value) || 1;
     const total = (Number(price) * quantity).toFixed(2);
-    totalEl.textContent = `Total: ${total} $TIRED`;
+    totalEl.textContent = `Total: ${total} $TOKENS`;
   }
 }
 
@@ -1320,7 +1321,7 @@ async function loadChests() {
     (data.chests || []).slice(0, 4).forEach((chest) => {
       const el = document.createElement('div');
       el.className = 'card';
-      el.innerHTML = `<h3>Сундук #${chest.id_chest}</h3><p>Цена: ${Number(chest.price).toString()} TIRED</p><p>Шансы: C:${chest.prob_common}% R:${chest.prob_rare}% E:${chest.prob_epic}% L:${chest.prob_legendary}%</p><button data-id="${chest.id_chest}" class="buy-chest">Купить</button>`;
+      el.innerHTML = `<h3>Сундук #${chest.id_chest}</h3><p>Цена: ${Number(chest.price).toString()} TOKENS</p><p>Шансы: C:${chest.prob_common}% R:${chest.prob_rare}% E:${chest.prob_epic}% L:${chest.prob_legendary}%</p><button data-id="${chest.id_chest}" class="buy-chest">Купить</button>`;
       container.appendChild(el);
     });
     container.querySelectorAll('.buy-chest').forEach(btn => btn.addEventListener('click', async () => { if (!currentWallet) { showMessage('Please connect your Phantom wallet first'); return; } const id = btn.getAttribute('data-id'); await purchaseChest(id, data.chests); }));
@@ -1355,7 +1356,7 @@ async function loadUserChests(wallet) {
             if (r.cashback) {
               const multiplier = r.cashback.multiplier;
               const cashbackAmount = r.cashback.amount.toFixed(2);
-              showMessage(`Card dropped: ${r.rarity} | Cashback: ${cashbackAmount} $TIRED (${multiplier}x)`, 'success');
+              showMessage(`Card dropped: ${r.rarity} | Cashback: ${cashbackAmount} $TOKENS (${multiplier}x)`, 'success');
             } else {
               showMessage(`Card dropped: ${r.rarity}`, 'success');
             }
@@ -1395,7 +1396,7 @@ async function loadMyPacks(wallet) {
         <img src="img/${packImage}" alt="Pack ${chest.id_chest}" class="pack-image">
         <div class="pack-card">
           <div class="pack-name">${getPackLabel(chest.id_chest)}</div>
-          <div class="pack-price">PRICE: ${Number(chest.price).toString()} $TIRED</div>
+          <div class="pack-price">PRICE: ${Number(chest.price).toString()} $TOKENS</div>
           <div class="pack-rates">CARD DROP RATES: Common: ${chest.prob_common}%; Rare: ${chest.prob_rare}%; Epic: ${chest.prob_epic}%; Legendary: ${chest.prob_legendary}%</div>
           <button class="pack-buy-btn" data-open-chest="${chest.id_chest}">Open</button>
         </div>`;
@@ -1801,7 +1802,7 @@ async function openPurchasedPack(idChest){
       if (r.cashback) {
         const multiplier = r.cashback.multiplier;
         const cashbackAmount = r.cashback.amount.toFixed(2);
-        cashbackInfo = `<div style="color: #FFD700; font-size: 16px; margin-top: 10px; font-weight: 600;">Cashback: ${cashbackAmount} $TIRED (${multiplier}x)</div>`;
+        cashbackInfo = `<div style="color: #FFD700; font-size: 16px; margin-top: 10px; font-weight: 600;">Cashback: ${cashbackAmount} $TOKENS (${multiplier}x)</div>`;
       }
 
       const { body } = modalElements();
