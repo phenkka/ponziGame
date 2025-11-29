@@ -16,16 +16,16 @@ services:
     networks:
       - gamba
 
-#  pgadmin:
-#    image: dpage/pgadmin4
-#    env_file: .env
-#    container_name: gamba_pg
-#    depends_on:
-#      - db
-#    ports:
-#      - "5050:80"
-#    networks:
-#      - gamba
+  pgadmin:
+    image: dpage/pgadmin4
+    env_file: .env
+    container_name: gamba_pg
+    depends_on:
+      - db
+    ports:
+      - "5050:80"
+    networks:
+      - gamba
 
   app:
     build: ./app

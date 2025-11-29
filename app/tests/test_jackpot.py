@@ -482,7 +482,7 @@ class TestJackpotDraw:
             for drawn_round in data["drawn_rounds"]:
                 if drawn_round["round_id"] == round_id:
                     round_found = True
-                    assert drawn_round["prize"] == 100.0  # 10% от 1000
+                    assert drawn_round["prize"] == 1000.0  # Вся сумма джекпота
                     assert drawn_round["winner"] in [f"user1_wallet_{unique_id}", f"user2_wallet_{unique_id}"]
                     assert drawn_round["tickets"] > 0
                     break
@@ -494,7 +494,7 @@ class TestJackpotDraw:
         round_data = cursor.fetchone()
         assert round_data["status"] == "completed"
         assert round_data["winner_user_id"] in [user1_id, user2_id]
-        assert float(round_data["prize_amount"]) == 100.0  # 10% от 1000
+        assert float(round_data["prize_amount"]) == 1000.0  # Вся сумма джекпота
         cursor.close()
     
     @pytest.mark.asyncio
@@ -531,7 +531,7 @@ class TestJackpotDraw:
         assert round_data is not None, "Round not found"
         assert round_data["status"] == "completed", f"Round status is {round_data['status']}, expected 'completed'"
         assert round_data["winner_user_id"] is None, "Winner should be None when no participants"
-        assert float(round_data["prize_amount"]) == 50.0  # 10% от 500
+        assert float(round_data["prize_amount"]) == 500.0  # Вся сумма джекпота
         cursor.close()
     
     @pytest.mark.asyncio
@@ -894,7 +894,7 @@ class TestJackpotRoundTransitions:
         old_round = cursor.fetchone()
         assert old_round["status"] == "completed"
         assert old_round["winner_user_id"] == user_id
-        assert float(old_round["prize_amount"]) == 100.0  # 10% от 1000
+        assert float(old_round["prize_amount"]) == 1000.0  # Вся сумма джекпота
         
         # Проверяем, что создан новый активный раунд
         cursor.execute("SELECT * FROM Jackpot_rounds WHERE status = 'active'")
@@ -1072,7 +1072,7 @@ class TestJackpotRoundTransitions:
 class TestJackpotPrizeCalculation:
     @pytest.mark.asyncio
     async def test_prize_is_10_percent_of_total_amount(self, clean_db, db_connection):
-        """Тест: приз составляет ровно 10% от total_amount"""
+        """Тест: приз составляет всю сумму джекпота (100% от total_amount)"""
         if db_connection is None:
             pytest.skip("Database not available")
         
@@ -1129,8 +1129,8 @@ class TestJackpotPrizeCalculation:
             cursor.execute("SELECT prize_amount FROM Jackpot_rounds WHERE id_round = %s", (round_id,))
             prize = cursor.fetchone()
             assert prize is not None, f"Round {round_id} not found"
-            expected_prize = total_amount * 0.1
+            expected_prize = total_amount  # Приз = вся сумма джекпота
             assert float(prize["prize_amount"]) == expected_prize, \
-                f"Prize should be 10% of {total_amount}, got {prize['prize_amount']}, expected {expected_prize}"
+                f"Prize should be 100% of {total_amount}, got {prize['prize_amount']}, expected {expected_prize}"
         
         cursor.close()

@@ -3,6 +3,8 @@ from fastapi.responses import JSONResponse
 from psycopg2.extras import RealDictCursor
 import hashlib
 import json
+import os
+import requests
 
 from core.models import AuthRequest
 from core.utils import get_db_connection, generate_ref_code, verify_solana_signature, verify_solana_transaction, HELIUS_RPC_URL, determine_card_rarity, get_random_card_by_rarity, get_or_create_active_round, add_to_jackpot, draw_jackpot, add_to_super_jackpot, claim_super_jackpot, get_or_create_active_super_jackpot_round
@@ -442,15 +444,83 @@ def setup_api_routes(app):
             except HTTPException:
                 raise
         
-        # Заглушка - возвращаем нулевой баланс
-        return {
-            "success": True,
-            "balance": {
-                "amount": 0,
-                "decimals": 9,
-                "symbol": "TOKENS"
+        # Получаем баланс токенов из Solana блокчейна
+        from core.utils import HELIUS_RPC_URL
+        
+        mint = os.getenv("TOKEN_MINT", "")
+        rpc_url = HELIUS_RPC_URL
+        
+        if not mint:
+            # Если mint не настроен, возвращаем нулевой баланс
+            return {
+                "success": True,
+                "balance": {
+                    "amount": 0,
+                    "decimals": 9,
+                    "symbol": "TOKENS"
+                }
             }
-        }
+        
+        try:
+            # Получаем все токен аккаунты пользователя
+            payload = {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "getTokenAccountsByOwner",
+                "params": [
+                    wallet,
+                    {
+                        "mint": mint
+                    },
+                    {
+                        "encoding": "jsonParsed"
+                    }
+                ]
+            }
+            
+            response = requests.post(rpc_url, json=payload, timeout=10)
+            if response.status_code != 200:
+                raise Exception(f"RPC request failed: {response.status_code}")
+            
+            data = response.json()
+            if "error" in data:
+                raise Exception(f"RPC error: {data['error']}")
+            
+            # Извлекаем баланс из ответа
+            balance_amount = 0
+            decimals = 9  # Дефолтное значение
+            
+            if "result" in data and data["result"] and "value" in data["result"]:
+                accounts = data["result"]["value"]
+                if accounts and len(accounts) > 0:
+                    # Берем первый аккаунт (обычно он один)
+                    account_info = accounts[0].get("account", {}).get("data", {}).get("parsed", {}).get("info", {})
+                    if account_info:
+                        # Получаем баланс в минимальных единицах (lamports для токенов)
+                        token_amount = account_info.get("tokenAmount", {})
+                        ui_amount = token_amount.get("uiAmount", 0)
+                        decimals = token_amount.get("decimals", 9)
+                        balance_amount = float(ui_amount) if ui_amount else 0
+            
+            return {
+                "success": True,
+                "balance": {
+                    "amount": balance_amount,
+                    "decimals": decimals,
+                    "symbol": "TOKENS"
+                }
+            }
+        except Exception as e:
+            print(f"Error fetching token balance: {e}")
+            # В случае ошибки возвращаем нулевой баланс
+            return {
+                "success": True,
+                "balance": {
+                    "amount": 0,
+                    "decimals": 9,
+                    "symbol": "TOKENS"
+                }
+            }
     
     @app.get("/api/user/{wallet}/cards")
     async def get_user_cards(wallet: str, request: Request):

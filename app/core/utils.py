@@ -618,8 +618,8 @@ def complete_expired_round(cursor, conn, round_id: int):
     round_data = cursor.fetchone()
     total_amount = float(round_data['total_amount']) if round_data else 0.0
     
-    # Приз = 10% от total_amount
-    prize_amount = total_amount * 0.1 if total_amount > 0 else 0.0
+    # Приз = вся сумма джекпота
+    prize_amount = total_amount if total_amount > 0 else 0.0
     
     # Обновляем раунд
     from datetime import datetime
@@ -712,9 +712,9 @@ def draw_jackpot(cursor, conn):
                         winner_wallet = participant['wallet']
                         break
         
-        # Приз = 10% от total_amount
+        # Приз = вся сумма джекпота
         total_amount = float(round_data['total_amount']) if round_data['total_amount'] else 0.0
-        prize_amount = total_amount * 0.1 if total_amount > 0 else 0.0
+        prize_amount = total_amount if total_amount > 0 else 0.0
         
         # Обновляем раунд
         cursor.execute("""

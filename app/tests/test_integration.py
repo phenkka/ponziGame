@@ -80,20 +80,22 @@ class TestFullAuthFlow:
     @pytest.mark.asyncio
     async def test_protected_endpoints_blocked(self):
         async with AsyncClient(app=app, base_url="http://test") as client:
-            # Проверяем защищенные эндпоинты
+            # Проверяем защищенные эндпоинты (profile disabled)
             protected_endpoints = [
                 "/shop",
                 "/battle",
                 "/cards",
-                "/profile",
                 "/rules",
             ]
             
             for endpoint in protected_endpoints:
                 response = await client.get(endpoint)
                 assert response.status_code == 401, f"Endpoint {endpoint} should be protected"
-                
                 data = response.json()
                 # FastAPI возвращает {"detail": "..."} для HTTPException
                 assert "detail" in data or "error" in data or "Unauthorized" in str(data).lower() or "Missing" in str(data)
+            
+            # Profile page is disabled, returns 404
+            profile_response = await client.get("/profile")
+            assert profile_response.status_code == 404, "Profile endpoint should be disabled (404)"
 

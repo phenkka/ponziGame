@@ -76,11 +76,10 @@ class TestProtectedEndpoints:
     
     @pytest.mark.asyncio
     async def test_profile_page_requires_auth(self, missing_auth_headers):
+        # Profile page is disabled, so it returns 404 instead of 401
         async with AsyncClient(app=app, base_url="http://test") as client:
             response = await client.get("/profile", headers=missing_auth_headers)
-            assert response.status_code == 401
-            data = response.json()
-            assert "detail" in data
+            assert response.status_code == 404  # Profile page is disabled
     
     @pytest.mark.asyncio
     async def test_rules_page_requires_auth(self, missing_auth_headers):
@@ -144,13 +143,16 @@ class TestProtectedEndpoints:
             "X-Message": message
         }
         
-        # Проверяем все защищенные страницы
-        pages = ["/shop", "/battle", "/cards", "/profile", "/rules"]
+        # Проверяем все защищенные страницы (profile disabled)
+        pages = ["/shop", "/battle", "/cards", "/rules"]
         async with AsyncClient(app=app, base_url="http://test") as client:
             for page in pages:
                 response = await client.get(page, headers=headers)
                 assert response.status_code == 200, f"Page {page} should be accessible with valid signature"
                 assert "text/html" in response.headers.get("content-type", "")
+            # Profile page is disabled
+            profile_response = await client.get("/profile", headers=headers)
+            assert profile_response.status_code == 404, "Profile page should be disabled (404)"
     
     @pytest.mark.asyncio
     async def test_pages_with_valid_cookie(self, clean_db, db_connection, test_user):
@@ -165,13 +167,16 @@ class TestProtectedEndpoints:
         
         cookies = {"auth_token": token_hash}
         
-        # Проверяем все защищенные страницы
-        pages = ["/shop", "/battle", "/cards", "/profile", "/rules"]
+        # Проверяем все защищенные страницы (profile disabled)
+        pages = ["/shop", "/battle", "/cards", "/rules"]
         async with AsyncClient(app=app, base_url="http://test") as client:
             for page in pages:
                 response = await client.get(page, cookies=cookies)
                 assert response.status_code == 200, f"Page {page} should be accessible with valid cookie"
                 assert "text/html" in response.headers.get("content-type", "")
+            # Profile page is disabled
+            profile_response = await client.get("/profile", cookies=cookies)
+            assert profile_response.status_code == 404, "Profile page should be disabled (404)"
     
     @pytest.mark.asyncio
     async def test_api_user_requires_auth(self, missing_auth_headers, test_user):
