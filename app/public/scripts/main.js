@@ -128,8 +128,8 @@ function showUserInfo(wallet, refCode, opts = {}) {
   }
   updatePackButtons();
   if (redirect) {
-    // Redirect to shop instead of showing shop page within index.html
-    window.location.href = '/shop';
+    // Redirect to profile page after successful auth
+    window.location.href = '/profile';
   }
 }
 
@@ -368,7 +368,12 @@ document.addEventListener('DOMContentLoaded', () => {
             const signature = await signMessage(message, publicKey);
             const response = await fetch('/api/auth', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wallet: publicKey, signature: signature.signature, message }) });
             const data = await response.json();
-            if (data.success) showUserInfo(publicKey, data.refCode, { redirect: true }); else showMessage(data.error || 'Authentication error');
+            if (data.success) {
+              showUserInfo(publicKey, data.refCode, { redirect: true });
+              window.location.href = '/profile';
+            } else {
+              showMessage(data.error || 'Authentication error');
+            }
           } else {
             // User needs to pay for entry
             showEntryModal(publicKey, wlData);
@@ -403,7 +408,12 @@ document.addEventListener('DOMContentLoaded', () => {
             const signature = await signMessage(message, publicKey);
             const response = await fetch('/api/auth', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wallet: publicKey, signature: signature.signature, message }) });
             const data = await response.json();
-            if (data.success) showUserInfo(publicKey, data.refCode, { redirect: true }); else showMessage(data.error || 'Authentication error');
+            if (data.success) {
+              showUserInfo(publicKey, data.refCode, { redirect: true });
+              window.location.href = '/profile';
+            } else {
+              showMessage(data.error || 'Authentication error');
+            }
           } else {
             // User needs to pay for entry
             showEntryModal(publicKey, wlData);
@@ -438,7 +448,12 @@ document.addEventListener('DOMContentLoaded', () => {
             const signature = await signMessage(message, publicKey);
             const response = await fetch('/api/auth', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wallet: publicKey, signature: signature.signature, message }) });
             const data = await response.json();
-            if (data.success) showUserInfo(publicKey, data.refCode, { redirect: true }); else showMessage(data.error || 'Authentication error');
+            if (data.success) {
+              showUserInfo(publicKey, data.refCode, { redirect: true });
+              window.location.href = '/profile';
+            } else {
+              showMessage(data.error || 'Authentication error');
+            }
           } else {
             // User needs to pay for entry
             showEntryModal(publicKey, wlData);
@@ -473,7 +488,12 @@ document.addEventListener('DOMContentLoaded', () => {
             const signature = await signMessage(message, publicKey);
             const response = await fetch('/api/auth', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wallet: publicKey, signature: signature.signature, message }) });
             const data = await response.json();
-            if (data.success) showUserInfo(publicKey, data.refCode, { redirect: true }); else showMessage(data.error || 'Authentication error');
+            if (data.success) {
+              showUserInfo(publicKey, data.refCode, { redirect: true });
+              window.location.href = '/profile';
+            } else {
+              showMessage(data.error || 'Authentication error');
+            }
           } else {
             // User needs to pay for entry
             showEntryModal(publicKey, wlData);
@@ -851,77 +871,6 @@ async function loadReferral() {
       } catch (e) { showMessage('Claim failed'); }
       finally { claimBtn.disabled = false; claimBtn.textContent = 'CLAIM $TOKENS'; }
     };
-    
-    // Also load cashback data when loading referral data
-    loadCashback();
-  } catch {} 
-}
-
-async function loadCashback() {
-  try {
-    const wallet = currentWallet || localStorage.getItem('wallet');
-    if (!wallet) return;
-    const r = await fetch(`/api/cashback/summary/${wallet}`);
-    const d = await r.json();
-    if (!d || !d.success) return;
-    
-    // Update cashback stats
-    const spentEl = document.getElementById('cashback-spent');
-    if (spentEl) spentEl.textContent = `${Number(d.totalSpent || 0).toFixed(2)} $TOKENS`;
-    
-    const earnedEl = document.getElementById('cashback-earned');
-    if (earnedEl) earnedEl.textContent = `${Number(d.totalEarned || 0).toFixed(2)} $TOKENS`;
-    
-    const claimedEl = document.getElementById('cashback-claimed');
-    if (claimedEl) claimedEl.textContent = `${Number(d.claimed || 0).toFixed(2)} $TOKENS`;
-    
-    const pendingEl = document.getElementById('cashback-pending');
-    if (pendingEl) pendingEl.textContent = `${Number(d.pending || 0).toFixed(2)} $TOKENS`;
-
-    const claimBtn = document.getElementById('cashback-claim-btn');
-    if (claimBtn) {
-      claimBtn.disabled = (d.pending || 0) <= 0;
-      claimBtn.onclick = async () => {
-        try {
-          claimBtn.disabled = true;
-          claimBtn.textContent = 'Claiming...';
-          const resp = await fetch('/api/cashback/claim', { 
-            method: 'POST', 
-            headers: { 'Content-Type': 'application/json' }, 
-            body: JSON.stringify({ wallet }) 
-          });
-          const j = await resp.json();
-          if (j && j.success) { 
-            showMessage(`Claimed ${j.amount} TOKENS cashback`, 'success'); 
-            loadCashback(); 
-          } else if (j && j.cooldown) {
-            // Show human-readable remaining time and set temporary disabled state
-            let remaining = Number(j.retryAfterSeconds || 0);
-            const format = (s) => {
-              const h = Math.floor(s/3600); s%=3600; const m = Math.floor(s/60); const sec = s%60;
-              const pad=(n)=>String(n).padStart(2,'0');
-              return `${pad(h)}:${pad(m)}:${pad(sec)}`;
-            };
-            showMessage(`Cashback cooldown. Available in ${format(remaining)}.`, 'error');
-            claimBtn.disabled = true;
-            const original = 'CLAIM CASHBACK';
-            claimBtn.textContent = `Available in ${format(remaining)}`;
-            const timer = setInterval(()=>{
-              remaining -= 1;
-              if (remaining <= 0) { clearInterval(timer); claimBtn.disabled = false; claimBtn.textContent = original; }
-              else claimBtn.textContent = `Available in ${format(remaining)}`;
-            },1000);
-            return;
-          } else {
-            showMessage(j.error || 'Claim failed');
-          }
-        } catch (e) { showMessage('Claim failed'); }
-        finally { 
-          claimBtn.disabled = false; 
-          claimBtn.textContent = 'CLAIM CASHBACK'; 
-        }
-      };
-    }
   } catch {} 
 }
 
@@ -1137,8 +1086,13 @@ async function connectWallet() {
     const message = `Gamba Auth: ${Date.now()}`;
     const signature = await signMessage(message, publicKey);
     const response = await fetch('/api/auth', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wallet: publicKey, signature: signature.signature, message }) });
-        const data = await response.json();
-    if (data.success) showUserInfo(publicKey, data.refCode, { redirect: true }); else showMessage(data.error || 'Authentication error');
+    const data = await response.json();
+    if (data.success) {
+      showUserInfo(publicKey, data.refCode, { redirect: true });
+      window.location.href = '/profile';
+    } else {
+      showMessage(data.error || 'Authentication error');
+    }
   } catch (error) { console.error('Connect wallet error:', error); showMessage(error.message || 'Wallet connection error'); }
 }
 
@@ -2751,6 +2705,7 @@ async function processEntryPayment(wallet, entryPrice) {
       showMessage(`Entry successful! Welcome to the game!`, 'success');
       closeModal();
       showUserInfo(wallet, data.refCode, { redirect: true });
+      window.location.href = '/profile';
     } else {
       showMessage(data.error || 'Entry payment failed');
     }

@@ -26,12 +26,11 @@ def setup_page_routes(app):
     @app.get("/cards")
     async def cards_page(request: Request, auth: dict = Depends(verify_session_cookie)):
         return FileResponse("public/cards.html")
-    
-    # Profile page disabled
-    # @app.get("/profile")
-    # async def profile_page(request: Request, auth: dict = Depends(verify_session_cookie)):
-    #     return FileResponse("public/referral.html")
-    
+
+    @app.get("/profile")
+    async def profile_page(request: Request, auth: dict = Depends(verify_session_cookie)):
+        return FileResponse("public/referral.html")
+
     @app.get("/rules")
     async def rules_page(request: Request, auth: dict = Depends(verify_session_cookie)):
         return FileResponse("public/rules.html")
