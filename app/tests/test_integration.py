@@ -48,9 +48,9 @@ class TestFullAuthFlow:
             }
             
             # Пытаемся получить доступ к /shop
-            shop_response = await client.get("/shop", headers=headers)
+            profile_response = await client.get("/shop", headers=headers)
             # Должен либо пройти (200), либо вернуть ошибку верификации, но не 401 из-за отсутствия заголовков
-            assert shop_response.status_code != 401 or "Missing" not in str(shop_response.content)
+            assert profile_response.status_code != 401 or "Missing" not in str(profile_response.content)
     
     @pytest.mark.asyncio
     async def test_unauthorized_access_blocked(self):

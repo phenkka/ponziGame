@@ -1,3 +1,26 @@
+    @pytest.mark.asyncio
+    async def test_shop_page_requires_auth(self, missing_auth_headers):
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            response = await client.get("/shop", headers=missing_auth_headers)
+            assert response.status_code == 401
+            data = response.json()
+            assert "detail" in data
+
+    @pytest.mark.asyncio
+    async def test_battle_page_requires_auth(self, missing_auth_headers):
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            response = await client.get("/battle", headers=missing_auth_headers)
+            assert response.status_code == 401
+            data = response.json()
+            assert "detail" in data
+
+    @pytest.mark.asyncio
+    async def test_cards_page_requires_auth(self, missing_auth_headers):
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            response = await client.get("/cards", headers=missing_auth_headers)
+            assert response.status_code == 401
+            data = response.json()
+            assert "detail" in data
 import pytest
 import sys
 from pathlib import Path
@@ -51,30 +74,6 @@ class TestPublicEndpoints:
 class TestProtectedEndpoints:
     
     @pytest.mark.asyncio
-    async def test_shop_page_requires_auth(self, missing_auth_headers):
-        async with AsyncClient(app=app, base_url="http://test") as client:
-            response = await client.get("/shop", headers=missing_auth_headers)
-            assert response.status_code == 401
-            data = response.json()
-            assert "detail" in data
-    
-    @pytest.mark.asyncio
-    async def test_battle_page_requires_auth(self, missing_auth_headers):
-        async with AsyncClient(app=app, base_url="http://test") as client:
-            response = await client.get("/battle", headers=missing_auth_headers)
-            assert response.status_code == 401
-            data = response.json()
-            assert "detail" in data
-    
-    @pytest.mark.asyncio
-    async def test_cards_page_requires_auth(self, missing_auth_headers):
-        async with AsyncClient(app=app, base_url="http://test") as client:
-            response = await client.get("/cards", headers=missing_auth_headers)
-            assert response.status_code == 401
-            data = response.json()
-            assert "detail" in data
-    
-    @pytest.mark.asyncio
     async def test_profile_page_requires_auth(self, missing_auth_headers):
         async with AsyncClient(app=app, base_url="http://test") as client:
             response = await client.get("/profile", headers=missing_auth_headers)
@@ -98,11 +97,27 @@ class TestProtectedEndpoints:
             data = response.json()
             assert "detail" in data
             assert "signature" in str(data["detail"]).lower() or "invalid" in str(data["detail"]).lower() or "authentication" in str(data["detail"]).lower()
-    
+
     @pytest.mark.asyncio
     async def test_battle_page_with_invalid_signature(self, invalid_auth_headers):
         async with AsyncClient(app=app, base_url="http://test") as client:
             response = await client.get("/battle", headers=invalid_auth_headers)
+            assert response.status_code == 401
+            data = response.json()
+            assert "detail" in data
+
+    @pytest.mark.asyncio
+    async def test_cards_page_with_invalid_signature(self, invalid_auth_headers):
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            response = await client.get("/cards", headers=invalid_auth_headers)
+            assert response.status_code == 401
+            data = response.json()
+            assert "detail" in data
+
+    @pytest.mark.asyncio
+    async def test_profile_page_with_invalid_signature(self, invalid_auth_headers):
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            response = await client.get("/profile", headers=invalid_auth_headers)
             assert response.status_code == 401
             data = response.json()
             assert "detail" in data

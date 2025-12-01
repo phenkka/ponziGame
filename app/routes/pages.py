@@ -14,18 +14,17 @@ def setup_page_routes(app):
     async def read_root():
         return FileResponse("public/index.html")
     
-    # Остальные HTML страницы - ЗАЩИЩЕНЫ через cookie
     @app.get("/shop")
     async def shop_page(request: Request, auth: dict = Depends(verify_session_cookie)):
-        return FileResponse("public/shop.html")
-    
+        return FileResponse("public/coming-soon.html")
+
     @app.get("/battle")
     async def battle_page(request: Request, auth: dict = Depends(verify_session_cookie)):
-        return FileResponse("public/battle.html")
-    
+        return FileResponse("public/coming-soon.html")
+
     @app.get("/cards")
     async def cards_page(request: Request, auth: dict = Depends(verify_session_cookie)):
-        return FileResponse("public/cards.html")
+        return FileResponse("public/coming-soon.html")
 
     @app.get("/profile")
     async def profile_page(request: Request, auth: dict = Depends(verify_session_cookie)):

@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Coming Soon</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto+Flex:opsz,wght@8..144,400;8..144,700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/style.css">
+    <style>
+        body {
+            margin: 0;
+            min-height: 100vh;
+            background: #060606;
+            color: #f5f5ff;
+            font-family: "Roboto Flex", "Inter", sans-serif;
+        }
+        .coming-video-bg {
+            position: fixed;
+            inset: 0;
+            overflow: hidden;
+            z-index: -1;
+        }
+        .coming-video-bg video {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 27%;
+            height: auto;
+            opacity: 0.45;
+            filter: saturate(1.2);
+        }
+        .coming-container {
+            max-width: 640px;
+            width: calc(100% - 32px);
+            text-align: center;
+        }
+        .coming-title {
+            margin: 0;
+            color: #ffffff;
+            text-transform: uppercase;
+            font-family: 'Roboto Flex', sans-serif;
+            font-weight: 800;
+            font-size: clamp(40px, 6vw, 72px);
+            line-height: 1.05;
+            text-shadow: 0 4px 20px rgba(0,0,0,0.35);
+            letter-spacing: 0.18em;
+            margin-bottom: 12px;
+        }
+        .coming-caption {
+            font-size: 18px;
+            color: #b4b7ff;
+            line-height: 1.6;
+        }
+    </style>
+</head>
+<body class="page-shop">
+    <div class="coming-video-bg">
+        <video autoplay muted loop playsinline>
+            <source src="img/main/rotation_pack.mp4" type="video/mp4">
+        </video>
+    </div>
+
+    <main class="main-content" style="display:flex; justify-content:center; align-items:center; height:100vh;">
+        <div class="dynamic-menu-container">
+            <div class="dynamic-menu-trigger"></div>
+            <div class="dynamic-menu-overlay"></div>
+            <nav class="dynamic-menu">
+                <div class="dynamic-menu-header">
+                    <div class="shop-brand">$TOKENS</div>
+                </div>
+                <div class="dynamic-menu-items">
+                    <a href="/shop" class="dynamic-menu-item" data-page="shop">
+                        <img src="img/menu/shop.png" alt="Shop" class="menu-icon">
+                        <span class="menu-text">shop</span>
+                    </a>
+                    <a href="/cards" class="dynamic-menu-item" data-page="cards">
+                        <img src="img/menu/cards.png" alt="Cards" class="menu-icon">
+                        <span class="menu-text">my collection</span>
+                    </a>
+                    <a href="/battle" class="dynamic-menu-item" data-page="battle">
+                        <img src="img/menu/battle.png" alt="Battle" class="menu-icon">
+                        <span class="menu-text">battle</span>
+                    </a>
+                    <a href="/profile" class="dynamic-menu-item" data-page="profile">
+                        <img src="img/menu/profile.png" alt="Profile" class="menu-icon">
+                        <span class="menu-text">profile</span>
+                    </a>
+                    <a href="/rules" class="dynamic-menu-item" data-page="rules">
+                        <img src="img/menu/rules.png" alt="Rules" class="menu-icon">
+                        <span class="menu-text">rules</span>
+                    </a>
+                </div>
+            </nav>
+        </div>
+
+        <div class="coming-container">
+            <div class="coming-title" id="page-title">COMING SOON</div>
+            <p class="coming-caption" id="page-caption">
+                Something new is being forged right now. Check back a little later.
+            </p>
+        </div>
+    </main>
+    <script>
+        const nameMap = {
+            "/shop": { title: "SHOP COMING SOON" },
+            "/cards": { title: "COLLECTION COMING SOON" },
+            "/battle": { title: "BATTLE COMING SOON" }
+        };
+        const info = nameMap[window.location.pathname];
+        if (info) {
+            document.getElementById("page-title").textContent = info.title;
+        }
+        document.getElementById("page-caption").textContent = "We’re building the next phase right now. Stay tuned.";
+    </script>
+</body>
+</html>
+
