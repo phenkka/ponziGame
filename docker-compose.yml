@@ -61,9 +61,6 @@ services:
     volumes:
       - certbot-etc:/etc/letsencrypt
       - certbot-var:/var/www/certbot
-    # будем запускать команды вручную через `docker compose run`
-    entrypoint: /bin/sh
-    command: -c "trap exit TERM; while :; do sleep 3600; done"
 
 volumes:
   postgres_data:
