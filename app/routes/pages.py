@@ -22,6 +22,10 @@ def setup_page_routes(app):
     async def battle_page(request: Request, auth: dict = Depends(verify_session_cookie)):
         return FileResponse("public/coming-soon.html")
 
+    @app.get("/predict")
+    async def predict_page(request: Request, auth: dict = Depends(verify_session_cookie)):
+        return FileResponse("public/coming-soon.html")
+
     @app.get("/cards")
     async def cards_page(request: Request, auth: dict = Depends(verify_session_cookie)):
         return FileResponse("public/coming-soon.html")

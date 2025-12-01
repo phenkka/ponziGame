@@ -2123,7 +2123,7 @@ body:not(.page-home) .last-jackpot-section .winner-wallet { font-size: 16px; }
     left: 0;
     z-index: 1000;
     height: 100vh;
-    width: 0; /* Контейнер не должен мешать, только полоса */
+    width: 0; /* Контейнер не мешает, только полоса-триггер */
 }
 
 .dynamic-menu-trigger {
