@@ -63,6 +63,27 @@ let currentWallet = null;
 let currentUser = null;
 const LAST_PAGE_KEY = 'lastPage';
 
+function getPendingReferralCode() {
+  try {
+    return localStorage.getItem('refSource');
+  } catch {
+    return null;
+  }
+}
+
+function clearPendingReferralCode() {
+  try {
+    localStorage.removeItem('refSource');
+  } catch {}
+}
+
+function buildAuthPayload(wallet, signature, message) {
+  const payload = { wallet, signature, message };
+  const pending = getPendingReferralCode();
+  if (pending) payload.referrerCode = pending;
+  return payload;
+}
+
 async function dynamicImport(urls) {
   for (const u of urls) {
     try { return await import(u); } catch (e) { /* try next */ }
@@ -366,9 +387,14 @@ document.addEventListener('DOMContentLoaded', () => {
             // User already has access, proceed with normal auth
             const message = `Gamba Auth: ${Date.now()}`;
             const signature = await signMessage(message, publicKey);
-            const response = await fetch('/api/auth', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wallet: publicKey, signature: signature.signature, message }) });
+            const response = await fetch('/api/auth', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(buildAuthPayload(publicKey, signature.signature, message))
+            });
             const data = await response.json();
             if (data.success) {
+              clearPendingReferralCode();
               showUserInfo(publicKey, data.refCode, { redirect: true });
               window.location.href = '/profile';
             } else {
@@ -406,9 +432,14 @@ document.addEventListener('DOMContentLoaded', () => {
             // User already has access, proceed with normal auth
             const message = `Gamba Auth: ${Date.now()}`;
             const signature = await signMessage(message, publicKey);
-            const response = await fetch('/api/auth', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wallet: publicKey, signature: signature.signature, message }) });
+            const response = await fetch('/api/auth', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(buildAuthPayload(publicKey, signature.signature, message))
+            });
             const data = await response.json();
             if (data.success) {
+              clearPendingReferralCode();
               showUserInfo(publicKey, data.refCode, { redirect: true });
               window.location.href = '/profile';
             } else {
@@ -446,9 +477,14 @@ document.addEventListener('DOMContentLoaded', () => {
             // User already has access, proceed with normal auth
             const message = `Gamba Auth: ${Date.now()}`;
             const signature = await signMessage(message, publicKey);
-            const response = await fetch('/api/auth', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wallet: publicKey, signature: signature.signature, message }) });
+            const response = await fetch('/api/auth', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(buildAuthPayload(publicKey, signature.signature, message))
+            });
             const data = await response.json();
             if (data.success) {
+              clearPendingReferralCode();
               showUserInfo(publicKey, data.refCode, { redirect: true });
               window.location.href = '/profile';
             } else {
@@ -486,9 +522,14 @@ document.addEventListener('DOMContentLoaded', () => {
             // User already has access, proceed with normal auth
             const message = `Gamba Auth: ${Date.now()}`;
             const signature = await signMessage(message, publicKey);
-            const response = await fetch('/api/auth', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wallet: publicKey, signature: signature.signature, message }) });
+            const response = await fetch('/api/auth', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(buildAuthPayload(publicKey, signature.signature, message))
+            });
             const data = await response.json();
             if (data.success) {
+              clearPendingReferralCode();
               showUserInfo(publicKey, data.refCode, { redirect: true });
               window.location.href = '/profile';
             } else {
@@ -594,7 +635,16 @@ document.addEventListener('DOMContentLoaded', () => {
     hideMessage();
     const urlParams = new URLSearchParams(window.location.search);
     const refCode = urlParams.get('ref');
-    if (refCode) { localStorage.setItem('refCode', refCode); showMessage('Referral code saved! It will be used automatically on sign-in.', 'success'); }
+    if (refCode) {
+      const normalizedRef = refCode.trim().toUpperCase();
+      if (normalizedRef) {
+        try {
+          localStorage.setItem('refSource', normalizedRef);
+          localStorage.setItem('refCode', normalizedRef);
+        } catch {}
+        showMessage('Referral code saved! It will be used automatically on sign-in.', 'success');
+      }
+    }
     const storedWallet = sessionStorage.getItem('wallet');
     if (storedWallet) {
       fetch(`/api/user/${storedWallet}`).then(r => r.json()).then(d => { if (d && d.success) showUserInfo(storedWallet, d.user.ref_code, { redirect: false }); }).catch(() => {});
@@ -853,24 +903,9 @@ async function loadReferral() {
     if (linkInput) linkInput.value = link;
     const cntEl = document.getElementById('ref-count');
     if (cntEl) cntEl.textContent = String(d.referrals || 0);
-    const rewEl = document.getElementById('ref-rewards');
-    if (rewEl) rewEl.textContent = `${Number(d.pending || 0).toString()} $TOKENS`;
 
     const copyBtn = document.getElementById('ref-copy');
     if (copyBtn) copyBtn.onclick = async () => { try { await navigator.clipboard.writeText(link); showMessage('Referral link copied!', 'success'); } catch {} };
-
-    const claimBtn = document.getElementById('ref-claim-btn');
-    if (claimBtn) claimBtn.onclick = async () => {
-      try {
-        claimBtn.disabled = true;
-        claimBtn.textContent = 'Claiming...';
-        const resp = await fetch('/api/referral/claim', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wallet }) });
-        const j = await resp.json();
-        if (j && j.success) { showMessage(`Claimed ${j.amount} TOKENS`, 'success'); loadReferral(); }
-        else showMessage(j.error || 'Claim failed');
-      } catch (e) { showMessage('Claim failed'); }
-      finally { claimBtn.disabled = false; claimBtn.textContent = 'CLAIM $TOKENS'; }
-    };
   } catch {} 
 }
 
@@ -1085,9 +1120,14 @@ async function connectWallet() {
     const publicKey = await connectPhantom();
     const message = `Gamba Auth: ${Date.now()}`;
     const signature = await signMessage(message, publicKey);
-    const response = await fetch('/api/auth', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wallet: publicKey, signature: signature.signature, message }) });
+    const response = await fetch('/api/auth', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(buildAuthPayload(publicKey, signature.signature, message))
+    });
     const data = await response.json();
     if (data.success) {
+      clearPendingReferralCode();
       showUserInfo(publicKey, data.refCode, { redirect: true });
       window.location.href = '/profile';
     } else {

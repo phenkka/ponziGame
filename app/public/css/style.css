@@ -695,12 +695,10 @@ body:not(.page-home) .page {
 .ref-input { background: #21213a; color: #ffffff; border: 1px solid #334; padding: 12px 16px; border-radius: 14px; width: 100%; font-family: 'Inter', sans-serif; }
 .ref-copy-btn { background: linear-gradient(45deg, #6E6BFF, #6E6BFF); color: #ffffff; border: none; padding: 10px 16px; border-radius: 14px; cursor: pointer; font-family: 'Inter', sans-serif; font-weight: 700; }
 .referral-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin: 24px 0; }
+.referral-stats.single { grid-template-columns: 1fr; }
 .ref-stat { display: flex; gap: 12px; align-items: baseline; }
 .ref-stat-label { color: #ffffff; opacity: .85; font-family: 'Inter', sans-serif; }
 .ref-stat-value { color: #ffffff; font-family: 'Inter', sans-serif; font-size: 18px; }
-.ref-claim { margin-top: 24px; }
-.ref-claim-btn { background: #FFDD00; color: #000; border: none; padding: 14px 22px; border-radius: 24px; font-family: 'Roboto Flex', sans-serif; font-weight: 900; letter-spacing: .02em; cursor: pointer; }
-
 .pack-info-text::after {
     content: '';
     width: 100%;

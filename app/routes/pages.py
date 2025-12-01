@@ -33,3 +33,11 @@ def setup_page_routes(app):
     @app.get("/rules")
     async def rules_page(request: Request, auth: dict = Depends(verify_session_cookie)):
         return FileResponse("public/rules.html")
+
+    @app.get("/ref/{ref_code}")
+    async def referral_redirect(ref_code: str):
+        """
+        Позволяет делиться короткой ссылкой вида /ref/XXXX, перенаправляя на главную
+        с query-параметром для фронта.
+        """
+        return RedirectResponse(url=f"/?ref={ref_code}")

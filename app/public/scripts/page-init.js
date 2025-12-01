@@ -171,8 +171,7 @@ document.addEventListener('DOMContentLoaded', () => {
     } else if (currentPath === '/cards' || currentPage.includes('page-cards')) {
         initCardsPage();
     } else if (currentPath === '/profile' || currentPage.includes('page-profile')) {
-        // Profile page disabled temporarily
-        // initProfilePage();
+        initProfilePage();
     } else if (currentPath === '/rules' || currentPage.includes('page-rules')) {
         initRulesPage();
     }

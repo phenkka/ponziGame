@@ -13,6 +13,53 @@ from pydantic import BaseModel
 
 
 def setup_api_routes(app):
+    async def _ensure_authorized_user(request: Request, wallet: str):
+        """
+        Проверяет, что запрос авторизован и принадлежит указанному кошельку.
+        Использует заголовки подписи или auth_token cookie.
+        """
+        x_wallet = request.headers.get("X-Wallet")
+        x_signature = request.headers.get("X-Signature")
+        x_message = request.headers.get("X-Message")
+        
+        if not x_wallet or not x_signature or not x_message:
+            auth_token = request.cookies.get("auth_token")
+            if auth_token:
+                try:
+                    from core.sessions import verify_session_cookie
+                    auth_data = await verify_session_cookie(request)
+                    if auth_data["wallet"] != wallet:
+                        raise HTTPException(
+                            status_code=403,
+                            detail="Access denied. You can only access your own data."
+                        )
+                except HTTPException:
+                    raise
+                except Exception:
+                    raise HTTPException(
+                        status_code=401,
+                        detail="Invalid session. Please reconnect your wallet."
+                    )
+            else:
+                raise HTTPException(
+                    status_code=401,
+                    detail="Missing authentication headers or cookie."
+                )
+        else:
+            try:
+                auth_data = await verify_auth(
+                    x_wallet=x_wallet,
+                    x_signature=x_signature,
+                    x_message=x_message
+                )
+                if auth_data["wallet"] != wallet:
+                    raise HTTPException(
+                        status_code=403,
+                        detail="Access denied. You can only access your own data."
+                    )
+            except HTTPException:
+                raise
+
     @app.get("/api/whitelist/{wallet}")
     async def check_whitelist(wallet: str):
         try:
@@ -55,12 +102,16 @@ def setup_api_routes(app):
             # Проверяем, существует ли пользователь
             cursor.execute("SELECT * FROM Users WHERE wallet = %s", (request.wallet,))
             user = cursor.fetchone()
+            user_id = None
+            is_new_user = False
             
             if user:
                 # Пользователь существует, возвращаем его данные
                 ref_code = user['ref_code']
+                user_id = user['id_user']
             else:
                 # Создаем нового пользователя
+                is_new_user = True
                 ref_code = generate_ref_code()
                 
                 # Проверяем уникальность ref_code (на случай коллизии)
@@ -72,10 +123,31 @@ def setup_api_routes(app):
                 
                 # Вставляем нового пользователя
                 cursor.execute(
-                    "INSERT INTO Users (wallet, ref_code) VALUES (%s, %s) RETURNING ref_code",
+                    "INSERT INTO Users (wallet, ref_code) VALUES (%s, %s) RETURNING id_user, ref_code",
                     (request.wallet, ref_code)
                 )
+                new_user = cursor.fetchone()
+                if new_user:
+                    user_id = new_user['id_user']
+                    ref_code = new_user['ref_code']
                 conn.commit()
+            
+            # Фиксируем реферала, если новый пользователь пришел по ссылке
+            if is_new_user and request.referrerCode:
+                referral_code = request.referrerCode.strip().upper()
+                if referral_code and referral_code != ref_code and user_id is not None:
+                    cursor.execute("SELECT id_user FROM Users WHERE ref_code = %s", (referral_code,))
+                    referrer = cursor.fetchone()
+                    if referrer and referrer['id_user'] != user_id:
+                        cursor.execute(
+                            """
+                            INSERT INTO Referral_system (id_referrer, id_referred)
+                            VALUES (%s, %s)
+                            ON CONFLICT (id_referred) DO NOTHING
+                            """,
+                            (referrer['id_user'], user_id)
+                        )
+                        conn.commit()
             
             cursor.close()
             conn.close()
@@ -1269,6 +1341,46 @@ def setup_api_routes(app):
                 status_code=500,
                 content={"success": False, "error": f"Internal error: {str(e)}"}
             )
+    
+    @app.get("/api/referral/summary/{wallet}")
+    async def get_referral_summary(wallet: str, request: Request):
+        await _ensure_authorized_user(request, wallet)
+        conn = None
+        cursor = None
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            cursor.execute("SELECT id_user, ref_code FROM Users WHERE wallet = %s", (wallet,))
+            user = cursor.fetchone()
+            if not user:
+                raise HTTPException(status_code=404, detail="User not found")
+            
+            cursor.execute(
+                "SELECT COUNT(*) FROM Referral_system WHERE id_referrer = %s",
+                (user['id_user'],)
+            )
+            ref_row = cursor.fetchone()
+            referral_count = int(ref_row['count']) if ref_row and ref_row['count'] else 0
+            
+            return {
+                "success": True,
+                "referrals": referral_count,
+                "refCode": user['ref_code']
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            print(f"Referral summary error: {e}")
+            return JSONResponse(
+                status_code=500,
+                content={"success": False, "error": "Failed to load referral summary"}
+            )
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                conn.close()
     
     @app.get("/health")
     async def health_check():

@@ -7,6 +7,7 @@ from unittest.mock import patch, MagicMock
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from httpx import AsyncClient
+from psycopg2.extras import RealDictCursor
 from main import app
 import json
 import hashlib
@@ -133,6 +134,58 @@ class TestUserChestsAPI:
             assert isinstance(data["chests"], list)
             assert len(data["chests"]) > 0
     
+
+class TestReferralAPI:
+    @pytest.mark.asyncio
+    async def test_referral_summary_returns_counts(self, clean_db, db_connection):
+        if db_connection is None:
+            pytest.skip("Database not available")
+        
+        signing_key = SigningKey.generate()
+        wallet_address = base58.b58encode(signing_key.verify_key.encode()).decode('utf-8')
+        cursor = db_connection.cursor(cursor_factory=RealDictCursor)
+        cursor.execute(
+            "INSERT INTO Users (wallet, ref_code) VALUES (%s, %s) RETURNING id_user, ref_code",
+            (wallet_address, "OWNER123")
+        )
+        owner = cursor.fetchone()
+        cursor.execute(
+            "INSERT INTO Users (wallet, ref_code) VALUES (%s, %s) RETURNING id_user",
+            ("ChildWalletA", "CHILDA")
+        )
+        child_a = cursor.fetchone()
+        cursor.execute(
+            "INSERT INTO Users (wallet, ref_code) VALUES (%s, %s) RETURNING id_user",
+            ("ChildWalletB", "CHILDB")
+        )
+        child_b = cursor.fetchone()
+        cursor.execute(
+            "INSERT INTO Referral_system (id_referrer, id_referred) VALUES (%s, %s)",
+            (owner["id_user"], child_a["id_user"])
+        )
+        cursor.execute(
+            "INSERT INTO Referral_system (id_referrer, id_referred) VALUES (%s, %s)",
+            (owner["id_user"], child_b["id_user"])
+        )
+        db_connection.commit()
+        cursor.close()
+        
+        message = "Gamba Auth: 1234567890"
+        signature_list = list(signing_key.sign(message.encode('utf-8')).signature)
+        headers = {
+            "X-Wallet": wallet_address,
+            "X-Signature": json.dumps(signature_list),
+            "X-Message": message
+        }
+        
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            response = await client.get(f"/api/referral/summary/{wallet_address}", headers=headers)
+            assert response.status_code == 200
+            data = response.json()
+            assert data["success"] is True
+            assert data["referrals"] == 2
+            assert data["refCode"] == "OWNER123"
+
     @pytest.mark.asyncio
     async def test_get_user_chests_with_cookie(self, clean_db, db_connection):
         if db_connection is None:

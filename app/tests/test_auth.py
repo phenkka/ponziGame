@@ -1,26 +1,3 @@
-    @pytest.mark.asyncio
-    async def test_shop_page_requires_auth(self, missing_auth_headers):
-        async with AsyncClient(app=app, base_url="http://test") as client:
-            response = await client.get("/shop", headers=missing_auth_headers)
-            assert response.status_code == 401
-            data = response.json()
-            assert "detail" in data
-
-    @pytest.mark.asyncio
-    async def test_battle_page_requires_auth(self, missing_auth_headers):
-        async with AsyncClient(app=app, base_url="http://test") as client:
-            response = await client.get("/battle", headers=missing_auth_headers)
-            assert response.status_code == 401
-            data = response.json()
-            assert "detail" in data
-
-    @pytest.mark.asyncio
-    async def test_cards_page_requires_auth(self, missing_auth_headers):
-        async with AsyncClient(app=app, base_url="http://test") as client:
-            response = await client.get("/cards", headers=missing_auth_headers)
-            assert response.status_code == 401
-            data = response.json()
-            assert "detail" in data
 import pytest
 import sys
 from pathlib import Path
@@ -29,6 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from httpx import AsyncClient
+from psycopg2.extras import RealDictCursor
 from main import app
 
 
@@ -317,6 +295,53 @@ class TestAuthFlow:
                 assert data["refCode"] == existing_ref_code
             else:
                 pytest.fail(f"Auth failed: {data.get('error', 'Unknown error')}")
+
+    @pytest.mark.asyncio
+    async def test_auth_links_new_user_with_referrer(self, clean_db, db_connection):
+        if db_connection is None:
+            pytest.skip("Database not available")
+        
+        import base58
+        from nacl.signing import SigningKey
+        
+        cursor = db_connection.cursor(cursor_factory=RealDictCursor)
+        cursor.execute(
+            "INSERT INTO Users (wallet, ref_code) VALUES (%s, %s) RETURNING id_user, ref_code",
+            ("RefWallet1234567890", "REFLINK1")
+        )
+        referrer = cursor.fetchone()
+        db_connection.commit()
+        cursor.close()
+        
+        signing_key = SigningKey.generate()
+        wallet_bytes = signing_key.verify_key.encode()
+        wallet_address = base58.b58encode(wallet_bytes).decode('utf-8')
+        message = "Gamba Auth: 1234567890"
+        signature_list = list(signing_key.sign(message.encode('utf-8')).signature)
+        
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            response = await client.post(
+                "/api/auth",
+                json={
+                    "wallet": wallet_address,
+                    "signature": signature_list,
+                    "message": message,
+                    "referrerCode": referrer["ref_code"]
+                }
+            )
+            assert response.status_code == 200
+            data = response.json()
+            assert data.get("success") is True
+        
+        cursor = db_connection.cursor(cursor_factory=RealDictCursor)
+        cursor.execute("SELECT id_user FROM Users WHERE wallet = %s", (wallet_address,))
+        new_user = cursor.fetchone()
+        cursor.execute("SELECT id_referrer FROM Referral_system WHERE id_referred = %s", (new_user['id_user'],))
+        referral_link = cursor.fetchone()
+        cursor.close()
+        
+        assert referral_link is not None
+        assert referral_link["id_referrer"] == referrer["id_user"]
 
 
 class TestAuthorizationHeaders:
