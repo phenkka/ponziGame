@@ -871,3 +871,288 @@ def claim_super_jackpot(cursor, conn, user_id: int) -> dict:
         "prize": total_amount
     }
 
+
+def get_utc_date():
+    """Получает текущую дату в UTC"""
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).date()
+
+
+def get_today_daily_code(cursor) -> str:
+    """Получает код для сегодняшнего дня (UTC)"""
+    today = get_utc_date()
+    
+    cursor.execute("SELECT daily_code FROM Daily_codes WHERE code_date = %s", (today,))
+    result = cursor.fetchone()
+    
+    if result:
+        return result['daily_code']
+    
+    # Если кода нет, генерируем новый (на случай если скрипт не был запущен)
+    import secrets
+    import string
+    code = ''.join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(8))
+    
+    # Проверяем уникальность
+    cursor.execute("SELECT id_code FROM Daily_codes WHERE daily_code = %s", (code,))
+    while cursor.fetchone():
+        code = ''.join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(8))
+        cursor.execute("SELECT id_code FROM Daily_codes WHERE daily_code = %s", (code,))
+    
+    cursor.execute(
+        "INSERT INTO Daily_codes (code_date, daily_code) VALUES (%s, %s) ON CONFLICT (code_date) DO NOTHING",
+        (today, code)
+    )
+    
+    return code
+
+
+def get_user_checkin_status(cursor, user_id: int) -> dict:
+    """Получает статус чекина пользователя (использует UTC)"""
+    from datetime import timedelta
+    today = get_utc_date()
+    yesterday = today - timedelta(days=1)
+    
+    # Получаем последний чекин
+    cursor.execute("""
+        SELECT checkin_date, consecutive_days
+        FROM Daily_checkins
+        WHERE id_user = %s
+        ORDER BY checkin_date DESC
+        LIMIT 1
+    """, (user_id,))
+    last_checkin = cursor.fetchone()
+    
+    # Проверяем, заходил ли сегодня
+    checked_in_today = False
+    consecutive_days = 0
+    
+    if last_checkin:
+        last_date = last_checkin['checkin_date']
+        if isinstance(last_date, str):
+            from datetime import datetime
+            last_date = datetime.strptime(last_date, '%Y-%m-%d').date()
+        
+        if last_date == today:
+            checked_in_today = True
+            consecutive_days = last_checkin['consecutive_days']
+        elif last_date == yesterday:
+            consecutive_days = last_checkin['consecutive_days']
+        else:
+            consecutive_days = 0
+    
+    return {
+        "checked_in_today": checked_in_today,
+        "consecutive_days": consecutive_days,
+        "can_claim_reward": consecutive_days >= 3
+    }
+
+
+def process_daily_checkin(cursor, conn, user_id: int, daily_code: str) -> dict:
+    """Обрабатывает ежедневный чекин и выдает награды за 3 дня подряд (использует UTC)"""
+    from datetime import timedelta, datetime, date
+    import json
+    import random
+    
+    today = get_utc_date()
+    yesterday = today - timedelta(days=1)
+    
+    # Получаем код для сегодня
+    cursor.execute("SELECT daily_code FROM Daily_codes WHERE code_date = %s", (today,))
+    code_result = cursor.fetchone()
+    
+    if not code_result:
+        # Пытаемся получить код через get_today_daily_code (он создаст, если нет)
+        today_code = get_today_daily_code(cursor)
+        conn.commit()  # Коммитим созданный код
+        expected_code = today_code
+    else:
+        expected_code = code_result['daily_code']
+    
+    # Нормализуем оба кода к верхнему регистру для сравнения
+    daily_code_upper = daily_code.strip().upper()
+    expected_code_upper = expected_code.strip().upper()
+    
+    if daily_code_upper != expected_code_upper:
+        # Проверяем, может быть это код для другой даты
+        cursor.execute("SELECT code_date FROM Daily_codes WHERE UPPER(TRIM(daily_code)) = %s", (daily_code_upper,))
+        code_for_other_date = cursor.fetchone()
+        if code_for_other_date:
+            other_date = code_for_other_date['code_date']
+            # Преобразуем в date объект, если это строка
+            if isinstance(other_date, str):
+                other_date = datetime.strptime(other_date, '%Y-%m-%d').date()
+            elif hasattr(other_date, 'date'):
+                other_date = other_date.date() if not isinstance(other_date, date) else other_date
+            
+            # Сравниваем даты
+            if other_date > today:
+                return {"success": False, "error": f"Invalid code. This code is for {other_date.strftime('%Y-%m-%d')} (future date), not for today ({today.strftime('%Y-%m-%d')} UTC). Please check Twitter for today's code."}
+            elif other_date < today:
+                return {"success": False, "error": f"Invalid code. This code is for {other_date.strftime('%Y-%m-%d')} (past date), not for today ({today.strftime('%Y-%m-%d')} UTC). Please check Twitter for today's code."}
+            else:
+                # Странно, код для сегодня, но не совпадает - возможно проблема с регистром уже решена выше
+                return {"success": False, "error": "Invalid daily code"}
+        return {"success": False, "error": "Invalid code. Please check the code from Twitter and try again."}
+    
+    # Проверяем, не заходил ли уже сегодня
+    cursor.execute("""
+        SELECT id_checkin FROM Daily_checkins
+        WHERE id_user = %s AND checkin_date = %s
+    """, (user_id, today))
+    
+    if cursor.fetchone():
+        return {"success": False, "error": "Already checked in today"}
+    
+    # Получаем последний чекин
+    cursor.execute("""
+        SELECT checkin_date, consecutive_days
+        FROM Daily_checkins
+        WHERE id_user = %s
+        ORDER BY checkin_date DESC
+        LIMIT 1
+    """, (user_id,))
+    last_checkin = cursor.fetchone()
+    
+    consecutive_days = 1
+    if last_checkin:
+        last_date = last_checkin['checkin_date']
+        if isinstance(last_date, str):
+            last_date = datetime.strptime(last_date, '%Y-%m-%d').date()
+        
+        if last_date == yesterday:
+            consecutive_days = last_checkin['consecutive_days'] + 1
+        # Если пропустил день, сбрасываем счетчик
+    
+    # Записываем чекин
+    reward_type = None
+    reward_data = None
+    
+    # Если 3 дня подряд, выдаем награду
+    if consecutive_days >= 3:
+        # Генерируем награду на основе вероятностей
+        roll = random.random() * 100
+        
+        if roll < 40:  # 40% - 3 broken пака (самое частое)
+            reward_type = "broken_packs"
+            reward_data = {"quantity": 3, "id_chest": 5}
+        elif roll < 65:  # 25% - 1 common пак (почаще)
+            reward_type = "common_pack"
+            reward_data = {"quantity": 1, "id_chest": 1}
+        elif roll < 75:  # 10% - 1 legendary пак (редко)
+            reward_type = "legendary_pack"
+            reward_data = {"quantity": 1, "id_chest": 4}
+        elif roll < 95:  # 20% - карточка common или rare (обычно)
+            reward_type = "card"
+            card_rarity = "basic" if random.random() < 0.6 else "rare"
+            reward_data = {"rarity": card_rarity}
+        else:  # 5% - персональное увеличение шансов (очень редко)
+            reward_type = "boost"
+            # Создаем boost на 24 часа
+            expires_at = datetime.now() + timedelta(hours=24)
+            reward_data = {
+                "boost_type": "legendary_chance",
+                "boost_value": 10.0,
+                "expires_at": expires_at.isoformat()
+            }
+            
+            # Сохраняем boost в БД
+            cursor.execute("""
+                INSERT INTO User_boost (id_user, boost_type, boost_value, expires_at)
+                VALUES (%s, %s, %s, %s)
+            """, (user_id, "legendary_chance", 10.0, expires_at))
+    
+    # Сохраняем чекин (используем нормализованный код)
+    cursor.execute("""
+        INSERT INTO Daily_checkins (id_user, checkin_date, daily_code, consecutive_days, reward_type, reward_data)
+        VALUES (%s, %s, %s, %s, %s, %s)
+    """, (user_id, today, daily_code_upper, consecutive_days, reward_type, json.dumps(reward_data) if reward_data else None))
+    
+    # Выдаем награды
+    rewards_issued = []
+    
+    if reward_type == "broken_packs":
+        # Выдаем 3 broken пака (id_chest = 5)
+        for _ in range(reward_data["quantity"]):
+            cursor.execute("""
+                INSERT INTO Chest_purchases (id_user, id_chest, tx_signature)
+                VALUES (%s, %s, %s)
+            """, (user_id, reward_data["id_chest"], f"daily_checkin_{user_id}_{today}_{random.randint(100000, 999999)}"))
+        rewards_issued.append({"type": "broken_packs", "quantity": reward_data["quantity"]})
+    
+    elif reward_type == "common_pack":
+        cursor.execute("""
+            INSERT INTO Chest_purchases (id_user, id_chest, tx_signature)
+            VALUES (%s, %s, %s)
+        """, (user_id, reward_data["id_chest"], f"daily_checkin_{user_id}_{today}_{random.randint(100000, 999999)}"))
+        rewards_issued.append({"type": "common_pack", "quantity": 1})
+    
+    elif reward_type == "legendary_pack":
+        cursor.execute("""
+            INSERT INTO Chest_purchases (id_user, id_chest, tx_signature)
+            VALUES (%s, %s, %s)
+        """, (user_id, reward_data["id_chest"], f"daily_checkin_{user_id}_{today}_{random.randint(100000, 999999)}"))
+        rewards_issued.append({"type": "legendary_pack", "quantity": 1})
+    
+    elif reward_type == "card":
+        # Выдаем случайную карту указанной редкости
+        card = get_random_card_by_rarity(reward_data["rarity"], cursor)
+        if card:
+            cursor.execute("""
+                INSERT INTO Card_User (id_user, id_card, quantity)
+                VALUES (%s, %s, 1)
+                ON CONFLICT (id_user, id_card) DO UPDATE SET quantity = Card_User.quantity + 1
+            """, (user_id, card['id_card']))
+            rewards_issued.append({
+                "type": "card",
+                "card_id": card['id_card'],
+                "card_name": card.get('name'),
+                "rarity": reward_data["rarity"]
+            })
+    
+    elif reward_type == "boost":
+        rewards_issued.append({
+            "type": "boost",
+            "boost_type": reward_data["boost_type"],
+            "boost_value": reward_data["boost_value"],
+            "expires_at": reward_data["expires_at"]
+        })
+    
+    conn.commit()
+    
+    return {
+        "success": True,
+        "consecutive_days": consecutive_days,
+        "reward_issued": len(rewards_issued) > 0,
+        "rewards": rewards_issued
+    }
+
+
+def get_user_active_boost(cursor, user_id: int) -> dict:
+    """Получает активный boost пользователя (увеличение шансов)"""
+    from datetime import datetime
+    
+    cursor.execute("""
+        SELECT boost_type, boost_value, expires_at
+        FROM User_boost
+        WHERE id_user = %s AND is_active = TRUE AND expires_at > %s
+        ORDER BY expires_at DESC
+        LIMIT 1
+    """, (user_id, datetime.now()))
+    
+    boost = cursor.fetchone()
+    
+    if boost:
+        expires_at = boost['expires_at']
+        if isinstance(expires_at, str):
+            expires_at = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
+        
+        return {
+            "active": True,
+            "boost_type": boost['boost_type'],
+            "boost_value": float(boost['boost_value']),
+            "expires_at": expires_at.isoformat() if hasattr(expires_at, 'isoformat') else str(expires_at)
+        }
+    
+    return {"active": False}
+

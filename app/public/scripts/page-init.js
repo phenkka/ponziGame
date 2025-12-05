@@ -20,6 +20,10 @@ function initShopPage() {
                 
                 // Small delay to ensure DOM is ready
                 setTimeout(() => {
+                    console.log('Calling loadBoostNotification...');
+                    if (typeof loadBoostNotification === 'function') {
+                        loadBoostNotification();
+                    }
                     console.log('Calling loadPacks...');
                     if (typeof loadPacks === 'function') {
                         loadPacks(true); // Load shop packs
@@ -125,6 +129,7 @@ function initProfilePage() {
             console.log('User data:', d);
             if (d && d.success) {
                 showUserInfo(storedWallet, d.user.ref_code, { redirect: false });
+                loadDailyCheckin(); // Load daily check-in status
                 loadReferral(); // Load profile data
                 loadJackpot(); // Load jackpot info
                 loadSuperJackpot(); // Load super jackpot info

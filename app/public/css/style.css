@@ -688,6 +688,186 @@ body:not(.page-home) .page {
     position: relative;
 }
 
+/* Daily Check-in section */
+.daily-checkin-section { margin: 4vh 2% 0; }
+.checkin-container {
+    background: #101010;
+    border: 1px solid #1e1e1e;
+    border-radius: 16px;
+    padding: 24px;
+    margin-top: 24px;
+}
+.checkin-status {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+.checkin-info {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    margin-bottom: 16px;
+}
+.checkin-days {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.checkin-label {
+    color: #ffffff;
+    opacity: 0.7;
+    font-family: 'Inter', sans-serif;
+    font-size: 14px;
+}
+.checkin-value {
+    color: #6E6BFF;
+    font-family: 'Roboto Flex', sans-serif;
+    font-weight: 800;
+    font-size: 20px;
+}
+.checkin-input-section {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+.checkin-input-wrapper {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.checkin-input-label {
+    color: #ffffff;
+    opacity: 0.9;
+    font-family: 'Inter', sans-serif;
+    font-size: 14px;
+}
+.checkin-code-input {
+    background: #21213a;
+    color: #ffffff;
+    border: 2px solid #334;
+    padding: 12px 16px;
+    border-radius: 14px;
+    width: 100%;
+    font-family: 'Inter', sans-serif;
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    text-align: center;
+    transition: all 0.3s ease;
+}
+.checkin-code-input:focus {
+    outline: none;
+    border-color: #6E6BFF;
+    box-shadow: 0 0 0 3px rgba(110, 107, 255, 0.2);
+}
+.checkin-code-input:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+.checkin-button {
+    background: linear-gradient(45deg, #6E6BFF, #6E6BFF);
+    color: #ffffff;
+    border: none;
+    padding: 12px 24px;
+    border-radius: 14px;
+    cursor: pointer;
+    font-family: 'Inter', sans-serif;
+    font-weight: 700;
+    font-size: 16px;
+    text-transform: uppercase;
+    transition: all 0.3s ease;
+    width: 100%;
+}
+.checkin-button:hover:not(:disabled) {
+    opacity: 0.9;
+    transform: translateY(-2px);
+}
+.checkin-button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+.checkin-message {
+    padding: 12px;
+    border-radius: 8px;
+    font-family: 'Inter', sans-serif;
+    font-size: 14px;
+    white-space: pre-line;
+    text-align: center;
+}
+.checkin-rewards-info {
+    margin-top: 24px;
+    padding-top: 24px;
+    border-top: 1px solid #1e1e1e;
+}
+.checkin-rewards-text {
+    color: #ffffff;
+    opacity: 0.8;
+    font-family: 'Inter', sans-serif;
+    font-size: 14px;
+    margin-bottom: 12px;
+}
+.checkin-rewards-list {
+    list-style: none;
+    padding-left: 0;
+    color: #ffffff;
+    font-family: 'Inter', sans-serif;
+    font-size: 14px;
+    opacity: 0.9;
+}
+.checkin-rewards-list li {
+    padding: 4px 0;
+    padding-left: 20px;
+    position: relative;
+}
+.checkin-rewards-list li::before {
+    content: '•';
+    position: absolute;
+    left: 0;
+    color: #6E6BFF;
+}
+
+/* Boost Notification section */
+.boost-notification-section {
+    margin: 4vh 2% 0;
+}
+.boost-notification-card {
+    background: linear-gradient(135deg, #6E6BFF 0%, #4A47CC 100%);
+    border: 2px solid #8B88FF;
+    border-radius: 16px;
+    padding: 24px;
+    text-align: center;
+    box-shadow: 0 4px 20px rgba(110, 107, 255, 0.3);
+}
+.boost-title {
+    font-family: 'Roboto Flex', sans-serif;
+    font-weight: 900;
+    font-size: 24px;
+    color: #ffffff;
+    margin-bottom: 12px;
+    text-transform: uppercase;
+}
+.boost-message {
+    font-family: 'Inter', sans-serif;
+    font-size: 16px;
+    color: #ffffff;
+    margin-bottom: 12px;
+    opacity: 0.95;
+}
+.boost-message span {
+    font-weight: 700;
+    color: #FFD700;
+}
+.boost-timer {
+    font-family: 'Inter', sans-serif;
+    font-size: 14px;
+    color: #ffffff;
+    opacity: 0.9;
+}
+.boost-timer span {
+    font-weight: 700;
+    color: #FFD700;
+}
+
 /* Referral page */
 .referral-section { margin: 4vh 2% 12vh; }
 .referral-row { display: grid; grid-template-columns: 120px 1fr auto; align-items: center; gap: 16px; margin: 24px 0; }
@@ -787,6 +967,30 @@ body:not(.page-home) .page {
     .header-content { flex-direction: column; gap: 1rem; padding: 0 1rem; }
     .nav { gap: 1rem; }
     .user-info { flex-direction: column; gap: 0.5rem; }
+    
+    /* Daily Check-in mobile */
+    .checkin-info {
+        flex-direction: column;
+        gap: 12px;
+    }
+    .checkin-container {
+        padding: 18px;
+    }
+    .checkin-code-input {
+        font-size: 16px;
+        letter-spacing: 1px;
+    }
+    
+    /* Boost notification mobile */
+    .boost-notification-card {
+        padding: 18px;
+    }
+    .boost-title {
+        font-size: 20px;
+    }
+    .boost-message {
+        font-size: 14px;
+    }
     .main-content { padding: 0 1rem; }
     
     /* Make packs grid single column on mobile */

@@ -890,6 +890,199 @@ async function loadJackpot() {
   }
 }
 
+async function loadDailyCheckin() {
+  try {
+    const wallet = currentWallet || sessionStorage.getItem('wallet') || localStorage.getItem('wallet');
+    if (!wallet) return;
+    
+    // Пробуем получить заголовки авторизации, если нет - используем cookie
+    const headers = {};
+    const signature = sessionStorage.getItem('signature') || '';
+    const message = sessionStorage.getItem('message') || '';
+    
+    if (signature && message) {
+      headers['X-Wallet'] = wallet;
+      headers['X-Signature'] = signature;
+      headers['X-Message'] = message;
+    }
+    
+    const r = await fetch(`/api/daily-checkin/status/${wallet}`, {
+      headers: headers,
+      credentials: 'include' // Важно для отправки cookies
+    });
+    const d = await r.json();
+    if (!d || !d.success) return;
+    
+    // Обновляем UI
+    const consecutiveDaysEl = document.getElementById('consecutive-days');
+    const checkinButton = document.getElementById('checkin-button');
+    const checkinMessage = document.getElementById('checkin-message');
+    const checkinInput = document.getElementById('checkin-code-input');
+    const checkinInputSection = document.getElementById('checkin-input-section');
+    
+    if (consecutiveDaysEl) consecutiveDaysEl.textContent = String(d.consecutive_days || 0);
+    
+    if (checkinButton && checkinInput) {
+      if (d.checked_in_today) {
+        // Уже зашел сегодня - скрываем поле ввода, показываем статус
+        if (checkinInputSection) checkinInputSection.style.display = 'none';
+        checkinButton.disabled = true;
+        checkinButton.textContent = 'ALREADY CHECKED IN';
+        checkinButton.style.display = 'block';
+        if (checkinMessage) {
+          checkinMessage.textContent = 'You have already checked in today!';
+          checkinMessage.style.display = 'block';
+          checkinMessage.style.color = '#4CAF50';
+        }
+      } else {
+        // Еще не зашел - показываем поле ввода
+        if (checkinInputSection) checkinInputSection.style.display = 'block';
+        checkinButton.disabled = true; // Будет активирована при вводе кода
+        checkinButton.textContent = 'CHECK IN';
+        if (checkinInput) {
+          checkinInput.value = '';
+          checkinInput.disabled = false;
+          checkinInput.focus();
+        }
+        if (checkinMessage) {
+          checkinMessage.style.display = 'none';
+        }
+        
+        // Активируем кнопку при вводе кода
+        checkinInput.oninput = () => {
+          const code = checkinInput.value.trim().toUpperCase();
+          checkinButton.disabled = code.length !== 8;
+          if (checkinMessage && checkinMessage.style.display !== 'none') {
+            checkinMessage.style.display = 'none';
+          }
+        };
+        
+        // Обработка Enter
+        checkinInput.onkeypress = (e) => {
+          if (e.key === 'Enter' && !checkinButton.disabled) {
+            checkinButton.click();
+          }
+        };
+      }
+      
+      // Обработчик клика
+      checkinButton.onclick = async () => {
+        if (checkinButton.disabled) return;
+        
+        const code = checkinInput ? checkinInput.value.trim().toUpperCase() : '';
+        if (!code || code.length !== 8) {
+          if (checkinMessage) {
+            checkinMessage.textContent = 'Please enter a valid 8-character code';
+            checkinMessage.style.display = 'block';
+            checkinMessage.style.color = '#f44336';
+          }
+          return;
+        }
+        
+        checkinButton.disabled = true;
+        checkinButton.textContent = 'Processing...';
+        if (checkinInput) checkinInput.disabled = true;
+        
+        try {
+          const checkinHeaders = {
+            'Content-Type': 'application/json'
+          };
+          const signature = sessionStorage.getItem('signature') || '';
+          const message = sessionStorage.getItem('message') || '';
+          
+          if (signature && message) {
+            checkinHeaders['X-Wallet'] = wallet;
+            checkinHeaders['X-Signature'] = signature;
+            checkinHeaders['X-Message'] = message;
+          }
+          
+          const checkinR = await fetch(`/api/daily-checkin/checkin/${wallet}`, {
+            method: 'POST',
+            headers: checkinHeaders,
+            credentials: 'include',
+            body: JSON.stringify({ daily_code: code })
+          });
+          
+          const checkinData = await checkinR.json();
+          
+          if (checkinData.success) {
+            checkinButton.textContent = 'CHECKED IN!';
+            if (checkinInput) {
+              checkinInput.value = '';
+              checkinInput.disabled = true;
+            }
+            
+            // Обновляем UI сразу на основе ответа от сервера
+            const consecutiveDaysEl = document.getElementById('consecutive-days');
+            if (consecutiveDaysEl) {
+              consecutiveDaysEl.textContent = String(checkinData.consecutive_days || 0);
+            }
+            
+            // Скрываем поле ввода, показываем статус
+            const checkinInputSection = document.getElementById('checkin-input-section');
+            if (checkinInputSection) {
+              checkinInputSection.style.display = 'none';
+            }
+            checkinButton.disabled = true;
+            checkinButton.textContent = 'ALREADY CHECKED IN';
+            
+            if (checkinMessage) {
+              let message = `Checked in! Consecutive days: ${checkinData.consecutive_days}`;
+              if (checkinData.reward_issued && checkinData.rewards && checkinData.rewards.length > 0) {
+                const rewards = checkinData.rewards.map(r => {
+                  if (r.type === 'broken_packs') return `${r.quantity} Broken Packs`;
+                  if (r.type === 'common_pack') return '1 Common Pack';
+                  if (r.type === 'legendary_pack') return '1 Legendary Pack';
+                  if (r.type === 'card') return `1 ${r.rarity} Card`;
+                  if (r.type === 'boost') return 'Personal Boost Activated!';
+                  return 'Reward';
+                }).join(', ');
+                message += `\nRewards: ${rewards}`;
+              }
+              checkinMessage.textContent = message;
+              checkinMessage.style.display = 'block';
+              checkinMessage.style.color = '#4CAF50';
+            }
+            
+            // Обновляем только chests, без перезагрузки всего статуса (чтобы избежать редиректа)
+            if (typeof loadUserChests === 'function') {
+              setTimeout(() => {
+                loadUserChests(wallet);
+              }, 1000);
+            }
+          } else {
+            checkinButton.disabled = false;
+            checkinButton.textContent = 'CHECK IN';
+            if (checkinInput) checkinInput.disabled = false;
+            if (checkinMessage) {
+              checkinMessage.textContent = checkinData.error || 'Invalid code. Please check the code from Twitter and try again.';
+              checkinMessage.style.display = 'block';
+              checkinMessage.style.color = '#f44336';
+            }
+            // Фокусируемся на поле ввода для повторной попытки
+            if (checkinInput) {
+              checkinInput.focus();
+              checkinInput.select();
+            }
+          }
+        } catch (error) {
+          console.error('Check-in error:', error);
+          checkinButton.disabled = false;
+          checkinButton.textContent = 'CHECK IN';
+          if (checkinInput) checkinInput.disabled = false;
+          if (checkinMessage) {
+            checkinMessage.textContent = 'Error checking in. Please try again.';
+            checkinMessage.style.display = 'block';
+            checkinMessage.style.color = '#f44336';
+          }
+        }
+      };
+    }
+  } catch (error) {
+    console.error('Error loading daily checkin:', error);
+  }
+}
+
 async function loadReferral() {
   try {
     const wallet = currentWallet || localStorage.getItem('wallet');
@@ -982,6 +1175,67 @@ async function drawJackpot() {
     const data = await r.json();
     if (data && data.success) showMessage(`Raffle finished! Winner: #${data.winnerUserId}, prize: ${data.prize} TOKENS`, 'success');
   } catch (e) { console.error('drawJackpot error', e); }
+}
+
+async function loadBoostNotification() {
+  try {
+    const wallet = currentWallet || sessionStorage.getItem('wallet') || localStorage.getItem('wallet');
+    if (!wallet) return;
+    
+    const headers = {};
+    const signature = sessionStorage.getItem('signature') || '';
+    const message = sessionStorage.getItem('message') || '';
+    
+    if (signature && message) {
+      headers['X-Wallet'] = wallet;
+      headers['X-Signature'] = signature;
+      headers['X-Message'] = message;
+    }
+    
+    const r = await fetch(`/api/daily-checkin/status/${wallet}`, {
+      headers: headers,
+      credentials: 'include'
+    });
+    const d = await r.json();
+    if (!d || !d.success || !d.boost || !d.boost.active) {
+      const boostSection = document.getElementById('boost-notification');
+      if (boostSection) boostSection.style.display = 'none';
+      return;
+    }
+    
+    const boostSection = document.getElementById('boost-notification');
+    const boostValueEl = document.getElementById('boost-value');
+    const boostTimeLeftEl = document.getElementById('boost-time-left');
+    
+    if (boostSection) boostSection.style.display = 'block';
+    if (boostValueEl) boostValueEl.textContent = String(d.boost.boost_value || 10);
+    
+    // Обновляем таймер
+    if (boostTimeLeftEl && d.boost.expires_at) {
+      const updateTimer = () => {
+        const expiresAt = new Date(d.boost.expires_at);
+        const now = new Date();
+        const diff = expiresAt - now;
+        
+        if (diff <= 0) {
+          boostTimeLeftEl.textContent = 'Expired';
+          if (boostSection) boostSection.style.display = 'none';
+          return;
+        }
+        
+        const hours = Math.floor(diff / (1000 * 60 * 60));
+        const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+        const seconds = Math.floor((diff % (1000 * 60)) / 1000);
+        
+        boostTimeLeftEl.textContent = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+      };
+      
+      updateTimer();
+      setInterval(updateTimer, 1000);
+    }
+  } catch (error) {
+    console.error('Error loading boost notification:', error);
+  }
 }
 
 async function loadPacks(forShop = false) {

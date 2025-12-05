@@ -7,7 +7,7 @@ import os
 import requests
 
 from core.models import AuthRequest
-from core.utils import get_db_connection, generate_ref_code, verify_solana_signature, verify_solana_transaction, HELIUS_RPC_URL, determine_card_rarity, get_random_card_by_rarity, get_or_create_active_round, add_to_jackpot, draw_jackpot, add_to_super_jackpot, claim_super_jackpot, get_or_create_active_super_jackpot_round
+from core.utils import get_db_connection, generate_ref_code, verify_solana_signature, verify_solana_transaction, HELIUS_RPC_URL, determine_card_rarity, get_random_card_by_rarity, get_or_create_active_round, add_to_jackpot, draw_jackpot, add_to_super_jackpot, claim_super_jackpot, get_or_create_active_super_jackpot_round, get_today_daily_code, get_user_checkin_status, process_daily_checkin, get_user_active_boost
 from core.auth import verify_auth
 from pydantic import BaseModel
 
@@ -1342,6 +1342,120 @@ def setup_api_routes(app):
                 content={"success": False, "error": f"Internal error: {str(e)}"}
             )
     
+    @app.get("/api/daily-checkin/status/{wallet}")
+    async def get_daily_checkin_status(wallet: str, request: Request):
+        """Получить статус ежедневного чекина"""
+        await _ensure_authorized_user(request, wallet)
+        conn = None
+        cursor = None
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            cursor.execute("SELECT id_user FROM Users WHERE wallet = %s", (wallet,))
+            user = cursor.fetchone()
+            if not user:
+                raise HTTPException(status_code=404, detail="User not found")
+            
+            # Получаем код для сегодня
+            today_code = get_today_daily_code(cursor)
+            # Коммитим, если код был сгенерирован
+            conn.commit()
+            
+            # Получаем статус чекина
+            status = get_user_checkin_status(cursor, user['id_user'])
+            
+            # Получаем активный boost
+            boost = get_user_active_boost(cursor, user['id_user'])
+            
+            return {
+                "success": True,
+                "today_code": today_code,
+                "checked_in_today": status["checked_in_today"],
+                "consecutive_days": status["consecutive_days"],
+                "can_claim_reward": status["can_claim_reward"],
+                "boost": boost
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            print(f"Get daily checkin status error: {e}")
+            import traceback
+            traceback.print_exc()
+            return JSONResponse(
+                status_code=500,
+                content={"success": False, "error": "Failed to load checkin status"}
+            )
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                conn.close()
+    
+    @app.post("/api/daily-checkin/checkin/{wallet}")
+    async def daily_checkin(wallet: str, request: Request):
+        """Выполнить ежедневный чекин"""
+        await _ensure_authorized_user(request, wallet)
+        conn = None
+        cursor = None
+        try:
+            body = await request.json()
+            daily_code = body.get("daily_code")
+            
+            if not daily_code:
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "error": "daily_code is required"}
+                )
+            
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            cursor.execute("SELECT id_user FROM Users WHERE wallet = %s", (wallet,))
+            user = cursor.fetchone()
+            if not user:
+                raise HTTPException(status_code=404, detail="User not found")
+            
+            # Обрабатываем чекин
+            result = process_daily_checkin(cursor, conn, user['id_user'], daily_code)
+            
+            if not result.get("success"):
+                error_msg = result.get("error", "Check-in failed")
+                # Улучшаем сообщения об ошибках для пользователя
+                if "Invalid daily code" in error_msg:
+                    error_msg = "Invalid code. Please check the code from Twitter and try again."
+                elif "Already checked in" in error_msg:
+                    error_msg = "You have already checked in today!"
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "success": False,
+                        "error": error_msg
+                    }
+                )
+            
+            return {
+                "success": True,
+                "consecutive_days": result["consecutive_days"],
+                "reward_issued": result["reward_issued"],
+                "rewards": result.get("rewards", [])
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            print(f"Daily checkin error: {e}")
+            import traceback
+            traceback.print_exc()
+            return JSONResponse(
+                status_code=500,
+                content={"success": False, "error": f"Internal error: {str(e)}"}
+            )
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                conn.close()
+    
     @app.get("/api/referral/summary/{wallet}")
     async def get_referral_summary(wallet: str, request: Request):
         await _ensure_authorized_user(request, wallet)
@@ -1850,7 +1964,7 @@ def setup_api_routes(app):
                         opponent_tickets += card_tickets
                 attempts += 1
             
-            # Если не набрали достаточно, добавляем еще карты
+            # Если не набрали достаточно, добавляем еще карты до минимума 100
             if opponent_tickets < 100:
                 for card in available_cards:
                     if card['id_card'] not in selected_opponent_cards and len(selected_opponent_cards) < 5:
@@ -1865,6 +1979,26 @@ def setup_api_routes(app):
                         opponent_tickets += card['start_bounty']
                         if opponent_tickets >= 100:
                             break
+                
+                # Если все еще меньше 100, добавляем карты без ограничения по количеству
+                if opponent_tickets < 100:
+                    for card in available_cards:
+                        if card['id_card'] not in selected_opponent_cards:
+                            selected_opponent_cards[card['id_card']] = {
+                                'id_card': card['id_card'],
+                                'quantity': 1,
+                                'start_bounty': card['start_bounty'],
+                                'name': card.get('name'),
+                                'image_url': card.get('image_url'),
+                                'rarity': card.get('rarity')
+                            }
+                            opponent_tickets += card['start_bounty']
+                            if opponent_tickets >= 100:
+                                break
+                
+                # Если все еще меньше 100 (мало карт в БД), устанавливаем минимум 100
+                if opponent_tickets < 100:
+                    opponent_tickets = 100
             
             opponent_cards_list = list(selected_opponent_cards.values())
             

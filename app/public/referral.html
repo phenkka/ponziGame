@@ -142,6 +142,47 @@
                         </div>
                     </div>
 
+                    <section class="daily-checkin-section" style="margin-top: 4vh;">
+                        <h2 class="packs-title">DAILY CHECK-IN</h2>
+                        <div class="checkin-container">
+                            <div class="checkin-status" id="checkin-status">
+                                <div class="checkin-info">
+                                    <div class="checkin-days">
+                                        <span class="checkin-label">Consecutive days:</span>
+                                        <span class="checkin-value" id="consecutive-days">0</span>
+                                    </div>
+                                </div>
+                                <div class="checkin-input-section" id="checkin-input-section">
+                                    <div class="checkin-input-wrapper">
+                                        <label for="checkin-code-input" class="checkin-input-label">Enter today's code from Twitter:</label>
+                                        <input 
+                                            type="text" 
+                                            id="checkin-code-input" 
+                                            class="checkin-code-input" 
+                                            placeholder="Enter 8-character code"
+                                            maxlength="8"
+                                            pattern="[A-Z0-9]{8}"
+                                            autocomplete="off"
+                                            style="text-transform: uppercase;"
+                                        />
+                                    </div>
+                                    <button class="checkin-button" id="checkin-button" disabled>CHECK IN</button>
+                                </div>
+                                <div class="checkin-message" id="checkin-message" style="display: none;"></div>
+                            </div>
+                            <div class="checkin-rewards-info">
+                                <p class="checkin-rewards-text">Check in 3 days in a row to get rewards:</p>
+                                <ul class="checkin-rewards-list">
+                                    <li>3 Broken Packs (most common)</li>
+                                    <li>1 Common Pack (common)</li>
+                                    <li>1 Legendary Pack (rare)</li>
+                                    <li>Common or Rare Card (usual)</li>
+                                    <li>Personal Boost (very rare)</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </section>
+
                     <section class="referral-section" style="margin-top: 4vh;">
                         <h2 class="packs-title">REFERRAL</h2>
                         <div class="referral-row">
