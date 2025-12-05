@@ -2409,9 +2409,22 @@ body:not(.page-home) .last-jackpot-section .winner-wallet { font-size: 16px; }
     transition: all 0.3s ease;
 }
 
-.dynamic-menu-container:hover .dynamic-menu-overlay {
+/* Убрано - используем класс .menu-open вместо hover */
+/* .dynamic-menu-container:hover .dynamic-menu-overlay {
     opacity: 1;
     visibility: visible;
+} */
+
+/* Overlay открыт через класс */
+.dynamic-menu-container.menu-open .dynamic-menu-overlay {
+    opacity: 1 !important;
+    visibility: visible !important;
+}
+
+/* Overlay закрыт (когда нет класса menu-open) */
+.dynamic-menu-container:not(.menu-open) .dynamic-menu-overlay {
+    opacity: 0 !important;
+    visibility: hidden !important;
 }
 
 .dynamic-menu {
@@ -2430,8 +2443,19 @@ body:not(.page-home) .last-jackpot-section .winner-wallet { font-size: 16px; }
     z-index: 1000;
 }
 
-.dynamic-menu-container:hover .dynamic-menu {
+/* Убрано - используем класс .menu-open вместо hover */
+/* .dynamic-menu-container:hover .dynamic-menu {
     transform: translateX(0);
+} */
+
+/* Меню открыто через класс */
+.dynamic-menu-container.menu-open .dynamic-menu {
+    transform: translateX(0) !important;
+}
+
+/* Меню закрыто (когда нет класса menu-open) */
+.dynamic-menu-container:not(.menu-open) .dynamic-menu {
+    transform: translateX(-100%) !important;
 }
 
 .dynamic-menu-header {
