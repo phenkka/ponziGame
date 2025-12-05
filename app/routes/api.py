@@ -1382,6 +1382,790 @@ def setup_api_routes(app):
             if conn:
                 conn.close()
     
+    @app.post("/api/battle/start")
+    async def start_battle(request: Request):
+        """Начать поиск противника для батла"""
+        try:
+            # Проверяем авторизацию
+            x_wallet = request.headers.get("X-Wallet")
+            x_signature = request.headers.get("X-Signature")
+            x_message = request.headers.get("X-Message")
+            
+            if not x_wallet or not x_signature or not x_message:
+                auth_token = request.cookies.get("auth_token")
+                if auth_token:
+                    try:
+                        from core.sessions import verify_session_cookie
+                        auth_data = await verify_session_cookie(request)
+                        x_wallet = auth_data["wallet"]
+                    except Exception as e:
+                        return JSONResponse(
+                            status_code=401,
+                            content={"success": False, "error": "Invalid session"}
+                        )
+                else:
+                    return JSONResponse(
+                        status_code=401,
+                        content={"success": False, "error": "Authentication required"}
+                    )
+            else:
+                try:
+                    auth_data = await verify_auth(x_wallet=x_wallet, x_signature=x_signature, x_message=x_message)
+                except HTTPException as e:
+                    return JSONResponse(
+                        status_code=e.status_code,
+                        content={"success": False, "error": e.detail}
+                    )
+            
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            # Получаем id_user
+            cursor.execute("SELECT id_user FROM Users WHERE wallet = %s", (x_wallet,))
+            user = cursor.fetchone()
+            if not user:
+                cursor.close()
+                conn.close()
+                return JSONResponse(
+                    status_code=404,
+                    content={"success": False, "error": "User not found"}
+                )
+            
+            user_id = user['id_user']
+            
+            # Проверяем, есть ли у пользователя карты
+            cursor.execute("""
+                SELECT COUNT(*) as card_count
+                FROM Card_User
+                WHERE id_user = %s AND quantity > 0
+            """, (user_id,))
+            card_count = cursor.fetchone()
+            
+            if not card_count or card_count['card_count'] == 0:
+                cursor.close()
+                conn.close()
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "success": False,
+                        "error": "You don't have any cards. You need at least one card to participate in battles."
+                    }
+                )
+            
+            # Проверяем, есть ли активный батл (исключаем отмененные и завершенные)
+            cursor.execute("""
+                SELECT id_battle, status FROM Battles 
+                WHERE id_user = %s
+                AND status IN ('searching', 'card_selection', 'fighting')
+                ORDER BY started_at DESC
+                LIMIT 1
+            """, (user_id,))
+            active_battle = cursor.fetchone()
+            
+            if active_battle:
+                cursor.close()
+                conn.close()
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "success": False,
+                        "error": "You already have an active battle",
+                        "battle_id": active_battle['id_battle'],
+                        "status": active_battle['status']
+                    }
+                )
+            
+            # Создаем новый батл
+            cursor.execute("""
+                INSERT INTO Battles (id_user, status)
+                VALUES (%s, 'searching')
+                RETURNING id_battle, started_at
+            """, (user_id,))
+            battle = cursor.fetchone()
+            
+            conn.commit()
+            cursor.close()
+            conn.close()
+            
+            # Генерируем случайное время поиска (30-60 секунд)
+            import random
+            search_duration = random.randint(30, 60)
+            
+            return {
+                "success": True,
+                "battle_id": battle['id_battle'],
+                "status": "searching",
+                "search_duration": search_duration,
+                "started_at": str(battle['started_at'])
+            }
+            
+        except Exception as e:
+            print(f"Start battle error: {e}")
+            import traceback
+            traceback.print_exc()
+            return JSONResponse(
+                status_code=500,
+                content={"success": False, "error": f"Internal error: {str(e)}"}
+            )
+    
+    @app.post("/api/battle/cancel")
+    async def cancel_battle(request: Request):
+        """Отменить активный батл"""
+        try:
+            body = await request.json()
+            wallet = body.get("wallet")
+            battle_id = body.get("battle_id")
+            
+            if not wallet or not battle_id:
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "error": "Missing required fields: wallet, battle_id"}
+                )
+            
+            # Проверяем авторизацию
+            x_wallet = request.headers.get("X-Wallet")
+            x_signature = request.headers.get("X-Signature")
+            x_message = request.headers.get("X-Message")
+            
+            if not x_wallet or not x_signature or not x_message:
+                auth_token = request.cookies.get("auth_token")
+                if auth_token:
+                    try:
+                        from core.sessions import verify_session_cookie
+                        auth_data = await verify_session_cookie(request)
+                        if auth_data["wallet"] != wallet:
+                            return JSONResponse(status_code=403, content={"success": False, "error": "Access denied"})
+                    except Exception as e:
+                        return JSONResponse(status_code=401, content={"success": False, "error": "Invalid session"})
+                else:
+                    return JSONResponse(status_code=401, content={"success": False, "error": "Authentication required"})
+            else:
+                try:
+                    auth_data = await verify_auth(x_wallet=x_wallet, x_signature=x_signature, x_message=x_message)
+                    if auth_data["wallet"] != wallet:
+                        return JSONResponse(status_code=403, content={"success": False, "error": "Access denied"})
+                except HTTPException as e:
+                    return JSONResponse(status_code=e.status_code, content={"success": False, "error": e.detail})
+            
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            # Проверяем батл
+            cursor.execute("""
+                SELECT b.*, u.id_user
+                FROM Battles b
+                JOIN Users u ON b.id_user = u.id_user
+                WHERE b.id_battle = %s AND u.wallet = %s
+            """, (battle_id, wallet))
+            battle = cursor.fetchone()
+            
+            if not battle:
+                cursor.close()
+                conn.close()
+                return JSONResponse(
+                    status_code=404,
+                    content={"success": False, "error": "Battle not found"}
+                )
+            
+            # Можно отменить только если батл еще не завершен
+            if battle['status'] == 'completed':
+                cursor.close()
+                conn.close()
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "error": "Cannot cancel completed battle"}
+                )
+            
+            # Отменяем батл
+            cursor.execute("""
+                UPDATE Battles
+                SET status = 'cancelled'
+                WHERE id_battle = %s
+            """, (battle_id,))
+            
+            conn.commit()
+            cursor.close()
+            conn.close()
+            
+            return {
+                "success": True,
+                "battle_id": battle_id,
+                "status": "cancelled"
+            }
+            
+        except Exception as e:
+            print(f"Cancel battle error: {e}")
+            import traceback
+            traceback.print_exc()
+            return JSONResponse(
+                status_code=500,
+                content={"success": False, "error": f"Internal error: {str(e)}"}
+            )
+    
+    @app.post("/api/battle/finish-search")
+    async def finish_battle_search(request: Request):
+        """Завершить поиск противника и перейти к выбору карт"""
+        try:
+            body = await request.json()
+            wallet = body.get("wallet")
+            battle_id = body.get("battle_id")
+            
+            if not wallet or not battle_id:
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "error": "Missing required fields: wallet, battle_id"}
+                )
+            
+            # Проверяем авторизацию
+            x_wallet = request.headers.get("X-Wallet")
+            x_signature = request.headers.get("X-Signature")
+            x_message = request.headers.get("X-Message")
+            
+            if not x_wallet or not x_signature or not x_message:
+                auth_token = request.cookies.get("auth_token")
+                if auth_token:
+                    try:
+                        from core.sessions import verify_session_cookie
+                        auth_data = await verify_session_cookie(request)
+                        if auth_data["wallet"] != wallet:
+                            return JSONResponse(status_code=403, content={"success": False, "error": "Access denied"})
+                    except Exception as e:
+                        return JSONResponse(status_code=401, content={"success": False, "error": "Invalid session"})
+                else:
+                    return JSONResponse(status_code=401, content={"success": False, "error": "Authentication required"})
+            else:
+                try:
+                    auth_data = await verify_auth(x_wallet=x_wallet, x_signature=x_signature, x_message=x_message)
+                    if auth_data["wallet"] != wallet:
+                        return JSONResponse(status_code=403, content={"success": False, "error": "Access denied"})
+                except HTTPException as e:
+                    return JSONResponse(status_code=e.status_code, content={"success": False, "error": e.detail})
+            
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            # Проверяем батл
+            cursor.execute("""
+                SELECT b.*, u.id_user
+                FROM Battles b
+                JOIN Users u ON b.id_user = u.id_user
+                WHERE b.id_battle = %s AND u.wallet = %s
+            """, (battle_id, wallet))
+            battle = cursor.fetchone()
+            
+            if not battle:
+                cursor.close()
+                conn.close()
+                return JSONResponse(
+                    status_code=404,
+                    content={"success": False, "error": "Battle not found"}
+                )
+            
+            if battle['status'] != 'searching':
+                cursor.close()
+                conn.close()
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "error": f"Battle is in {battle['status']} status, not searching"}
+                )
+            
+            # Переводим в статус выбора карт
+            cursor.execute("""
+                UPDATE Battles
+                SET status = 'card_selection'
+                WHERE id_battle = %s
+            """, (battle_id,))
+            
+            conn.commit()
+            cursor.close()
+            conn.close()
+            
+            return {
+                "success": True,
+                "battle_id": battle_id,
+                "status": "card_selection"
+            }
+            
+        except Exception as e:
+            print(f"Finish battle search error: {e}")
+            import traceback
+            traceback.print_exc()
+            return JSONResponse(
+                status_code=500,
+                content={"success": False, "error": f"Internal error: {str(e)}"}
+            )
+    
+    @app.post("/api/battle/select-cards")
+    async def select_battle_cards(request: Request):
+        """Выбрать карты для батла"""
+        try:
+            body = await request.json()
+            wallet = body.get("wallet")
+            battle_id = body.get("battle_id")
+            cards = body.get("cards", [])  # [{id_card, quantity}, ...]
+            
+            if not wallet or not battle_id or not cards:
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "error": "Missing required fields: wallet, battle_id, cards"}
+                )
+            
+            if len(cards) == 0 or len(cards) > 5:
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "error": "You must select 1-5 cards"}
+                )
+            
+            # Проверяем авторизацию
+            x_wallet = request.headers.get("X-Wallet")
+            x_signature = request.headers.get("X-Signature")
+            x_message = request.headers.get("X-Message")
+            
+            if not x_wallet or not x_signature or not x_message:
+                auth_token = request.cookies.get("auth_token")
+                if auth_token:
+                    try:
+                        from core.sessions import verify_session_cookie
+                        auth_data = await verify_session_cookie(request)
+                        if auth_data["wallet"] != wallet:
+                            return JSONResponse(status_code=403, content={"success": False, "error": "Access denied"})
+                    except Exception as e:
+                        return JSONResponse(status_code=401, content={"success": False, "error": "Invalid session"})
+                else:
+                    return JSONResponse(status_code=401, content={"success": False, "error": "Authentication required"})
+            else:
+                try:
+                    auth_data = await verify_auth(x_wallet=x_wallet, x_signature=x_signature, x_message=x_message)
+                    if auth_data["wallet"] != wallet:
+                        return JSONResponse(status_code=403, content={"success": False, "error": "Access denied"})
+                except HTTPException as e:
+                    return JSONResponse(status_code=e.status_code, content={"success": False, "error": e.detail})
+            
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            # Проверяем батл
+            cursor.execute("""
+                SELECT b.*, u.id_user
+                FROM Battles b
+                JOIN Users u ON b.id_user = u.id_user
+                WHERE b.id_battle = %s AND u.wallet = %s
+            """, (battle_id, wallet))
+            battle = cursor.fetchone()
+            
+            if not battle:
+                cursor.close()
+                conn.close()
+                return JSONResponse(
+                    status_code=404,
+                    content={"success": False, "error": "Battle not found"}
+                )
+            
+            if battle['status'] != 'card_selection':
+                cursor.close()
+                conn.close()
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "error": f"Battle is in {battle['status']} status, cannot select cards"}
+                )
+            
+            # Проверяем, что у пользователя есть все выбранные карты
+            user_id = battle['id_user']
+            total_tickets = 0
+            
+            for card_data in cards:
+                id_card = card_data.get('id_card')
+                quantity = card_data.get('quantity', 1)
+                
+                if not id_card or quantity <= 0:
+                    cursor.close()
+                    conn.close()
+                    return JSONResponse(
+                        status_code=400,
+                        content={"success": False, "error": "Invalid card data"}
+                    )
+                
+                # Проверяем наличие карты
+                cursor.execute("""
+                    SELECT cu.quantity as user_quantity, c.start_bounty
+                    FROM Card_User cu
+                    JOIN Cards c ON cu.id_card = c.id_card
+                    WHERE cu.id_user = %s AND cu.id_card = %s
+                """, (user_id, id_card))
+                card_info = cursor.fetchone()
+                
+                if not card_info or card_info['user_quantity'] < quantity:
+                    cursor.close()
+                    conn.close()
+                    return JSONResponse(
+                        status_code=400,
+                        content={"success": False, "error": f"Not enough cards. Card {id_card}: have {card_info['user_quantity'] if card_info else 0}, need {quantity}"}
+                    )
+                
+                total_tickets += card_info['start_bounty'] * quantity
+            
+            # Сохраняем выбранные карты
+            import json
+            cursor.execute("""
+                UPDATE Battles
+                SET user_cards = %s, user_tickets = %s, status = 'fighting'
+                WHERE id_battle = %s
+            """, (json.dumps(cards), total_tickets, battle_id))
+            
+            # Генерируем карты для противника (1-5 карт, сумма билетов 100-400)
+            import random
+            opponent_tickets_target = random.randint(100, 400)
+            opponent_tickets = 0
+            
+            # Получаем случайные карты из БД с полной информацией
+            cursor.execute("""
+                SELECT id_card, start_bounty, rarity, name, image_url, image_key
+                FROM Cards
+                WHERE image_url IS NOT NULL AND image_url != ''
+                ORDER BY RANDOM()
+                LIMIT 50
+            """)
+            available_cards = cursor.fetchall()
+            
+            # Выбираем карты для противника, чтобы сумма была близка к цели
+            selected_opponent_cards = {}
+            attempts = 0
+            num_opponent_cards = random.randint(1, 5)  # Случайное количество карт
+            
+            while opponent_tickets < opponent_tickets_target and attempts < 100 and len(selected_opponent_cards) < num_opponent_cards:
+                card = random.choice(available_cards)
+                card_id = card['id_card']
+                card_tickets = card['start_bounty']
+                
+                if opponent_tickets + card_tickets <= opponent_tickets_target + 100:  # Допуск
+                    if card_id not in selected_opponent_cards:
+                        selected_opponent_cards[card_id] = {
+                            'id_card': card_id,
+                            'quantity': 1,
+                            'start_bounty': card_tickets,
+                            'name': card.get('name'),
+                            'image_url': card.get('image_url'),
+                            'rarity': card.get('rarity')
+                        }
+                        opponent_tickets += card_tickets
+                attempts += 1
+            
+            # Если не набрали достаточно, добавляем еще карты
+            if opponent_tickets < 100:
+                for card in available_cards:
+                    if card['id_card'] not in selected_opponent_cards and len(selected_opponent_cards) < 5:
+                        selected_opponent_cards[card['id_card']] = {
+                            'id_card': card['id_card'],
+                            'quantity': 1,
+                            'start_bounty': card['start_bounty'],
+                            'name': card.get('name'),
+                            'image_url': card.get('image_url'),
+                            'rarity': card.get('rarity')
+                        }
+                        opponent_tickets += card['start_bounty']
+                        if opponent_tickets >= 100:
+                            break
+            
+            opponent_cards_list = list(selected_opponent_cards.values())
+            
+            # Обновляем батл с картами противника (внутреннее название bot_cards остается для БД)
+            cursor.execute("""
+                UPDATE Battles
+                SET bot_cards = %s, bot_tickets = %s
+                WHERE id_battle = %s
+            """, (json.dumps(opponent_cards_list), opponent_tickets, battle_id))
+            
+            conn.commit()
+            cursor.close()
+            conn.close()
+            
+            return {
+                "success": True,
+                "battle_id": battle_id,
+                "user_cards": cards,
+                "user_tickets": total_tickets,
+                "opponent_tickets": opponent_tickets,
+                "status": "fighting"
+            }
+            
+        except Exception as e:
+            print(f"Select battle cards error: {e}")
+            import traceback
+            traceback.print_exc()
+            return JSONResponse(
+                status_code=500,
+                content={"success": False, "error": f"Internal error: {str(e)}"}
+            )
+    
+    @app.post("/api/battle/fight")
+    async def fight_battle(request: Request):
+        """Провести бой и определить победителя"""
+        try:
+            body = await request.json()
+            wallet = body.get("wallet")
+            battle_id = body.get("battle_id")
+            
+            if not wallet or not battle_id:
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "error": "Missing required fields: wallet, battle_id"}
+                )
+            
+            # Проверяем авторизацию
+            x_wallet = request.headers.get("X-Wallet")
+            x_signature = request.headers.get("X-Signature")
+            x_message = request.headers.get("X-Message")
+            
+            if not x_wallet or not x_signature or not x_message:
+                auth_token = request.cookies.get("auth_token")
+                if auth_token:
+                    try:
+                        from core.sessions import verify_session_cookie
+                        auth_data = await verify_session_cookie(request)
+                        if auth_data["wallet"] != wallet:
+                            return JSONResponse(status_code=403, content={"success": False, "error": "Access denied"})
+                    except Exception as e:
+                        return JSONResponse(status_code=401, content={"success": False, "error": "Invalid session"})
+                else:
+                    return JSONResponse(status_code=401, content={"success": False, "error": "Authentication required"})
+            else:
+                try:
+                    auth_data = await verify_auth(x_wallet=x_wallet, x_signature=x_signature, x_message=x_message)
+                    if auth_data["wallet"] != wallet:
+                        return JSONResponse(status_code=403, content={"success": False, "error": "Access denied"})
+                except HTTPException as e:
+                    return JSONResponse(status_code=e.status_code, content={"success": False, "error": e.detail})
+            
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            # Получаем батл
+            cursor.execute("""
+                SELECT b.*, u.id_user
+                FROM Battles b
+                JOIN Users u ON b.id_user = u.id_user
+                WHERE b.id_battle = %s AND u.wallet = %s
+            """, (battle_id, wallet))
+            battle = cursor.fetchone()
+            
+            if not battle:
+                cursor.close()
+                conn.close()
+                return JSONResponse(
+                    status_code=404,
+                    content={"success": False, "error": "Battle not found"}
+                )
+            
+            if battle['status'] != 'fighting':
+                cursor.close()
+                conn.close()
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "error": f"Battle is in {battle['status']} status, cannot fight"}
+                )
+            
+            user_id = battle['id_user']
+            user_tickets = battle['user_tickets']
+            opponent_tickets = battle['bot_tickets']  # Внутреннее название, в ответе будет opponent_tickets
+            
+            # Определяем победителя
+            # Билеты не влияют на победу - это только для отображения
+            import random
+            import json
+            from datetime import datetime
+            
+            # Случайное определение победителя
+            # Противник выигрывает в 70% случаев
+            random_value = random.random()
+            opponent_wins = random_value < 0.70
+            winner = 'bot' if opponent_wins else 'user'  # В БД остается bot для внутренней логики
+            
+            # Обновляем статус батла
+            cursor.execute("""
+                UPDATE Battles
+                SET status = 'completed', winner = %s, completed_at = %s
+                WHERE id_battle = %s
+            """, (winner, datetime.now(), battle_id))
+            
+            # Передаем карты
+            user_cards = json.loads(battle['user_cards']) if isinstance(battle['user_cards'], str) else battle['user_cards']
+            opponent_cards = json.loads(battle['bot_cards']) if isinstance(battle['bot_cards'], str) else battle['bot_cards']
+            
+            # Получаем полную информацию о картах пользователя
+            user_cards_full = []
+            for card_data in user_cards:
+                cursor.execute("""
+                    SELECT id_card, name, image_url, start_bounty, rarity
+                    FROM Cards
+                    WHERE id_card = %s
+                """, (card_data['id_card'],))
+                card_info = cursor.fetchone()
+                if card_info:
+                    user_cards_full.append({
+                        'id_card': card_info['id_card'],
+                        'name': card_info.get('name'),
+                        'image_url': card_info.get('image_url'),
+                        'start_bounty': card_info['start_bounty'],
+                        'rarity': card_info.get('rarity'),
+                        'quantity': card_data.get('quantity', 1)
+                    })
+            
+            # Получаем полную информацию о картах противника
+            opponent_cards_full = []
+            for card_data in opponent_cards:
+                cursor.execute("""
+                    SELECT id_card, name, image_url, start_bounty, rarity
+                    FROM Cards
+                    WHERE id_card = %s
+                """, (card_data['id_card'],))
+                card_info = cursor.fetchone()
+                if card_info:
+                    opponent_cards_full.append({
+                        'id_card': card_info['id_card'],
+                        'name': card_info.get('name'),
+                        'image_url': card_info.get('image_url'),
+                        'start_bounty': card_info['start_bounty'],
+                        'rarity': card_info.get('rarity'),
+                        'quantity': card_data.get('quantity', 1)
+                    })
+            
+            if opponent_wins:
+                # Противник выиграл - пользователь теряет свои карты
+                for card_data in user_cards:
+                    id_card = card_data['id_card']
+                    quantity = card_data['quantity']
+                    cursor.execute("""
+                        UPDATE Card_User
+                        SET quantity = quantity - %s
+                        WHERE id_user = %s AND id_card = %s
+                    """, (quantity, user_id, id_card))
+                    cursor.execute("""
+                        DELETE FROM Card_User
+                        WHERE id_user = %s AND id_card = %s AND quantity <= 0
+                    """, (user_id, id_card))
+            else:
+                # Пользователь выиграл - получает карты противника
+                for card_data in opponent_cards:
+                    id_card = card_data['id_card']
+                    quantity = card_data.get('quantity', 1)
+                    cursor.execute("""
+                        INSERT INTO Card_User (id_user, id_card, quantity)
+                        VALUES (%s, %s, %s)
+                        ON CONFLICT (id_user, id_card) DO UPDATE SET quantity = Card_User.quantity + %s
+                    """, (user_id, id_card, quantity, quantity))
+            
+            conn.commit()
+            cursor.close()
+            conn.close()
+            
+            # Преобразуем winner для ответа (bot -> opponent)
+            winner_response = 'opponent' if winner == 'bot' else winner
+            
+            return {
+                "success": True,
+                "battle_id": battle_id,
+                "winner": winner_response,
+                "user_tickets": user_tickets,
+                "opponent_tickets": opponent_tickets,
+                "user_cards": user_cards_full,
+                "opponent_cards": opponent_cards_full,
+                "cards_won": opponent_cards_full if not opponent_wins else [],
+                "cards_lost": user_cards_full if opponent_wins else []
+            }
+            
+        except Exception as e:
+            print(f"Fight battle error: {e}")
+            import traceback
+            traceback.print_exc()
+            return JSONResponse(
+                status_code=500,
+                content={"success": False, "error": f"Internal error: {str(e)}"}
+            )
+    
+    @app.get("/api/battle/status/{battle_id}")
+    async def get_battle_status(battle_id: int, request: Request):
+        """Получить статус батла"""
+        try:
+            # Проверяем авторизацию
+            x_wallet = request.headers.get("X-Wallet")
+            x_signature = request.headers.get("X-Signature")
+            x_message = request.headers.get("X-Message")
+            
+            wallet = None
+            if not x_wallet or not x_signature or not x_message:
+                auth_token = request.cookies.get("auth_token")
+                if auth_token:
+                    try:
+                        from core.sessions import verify_session_cookie
+                        auth_data = await verify_session_cookie(request)
+                        wallet = auth_data["wallet"]
+                    except Exception:
+                        pass
+            else:
+                try:
+                    auth_data = await verify_auth(x_wallet=x_wallet, x_signature=x_signature, x_message=x_message)
+                    wallet = auth_data["wallet"]
+                except HTTPException:
+                    pass
+            
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            cursor.execute("""
+                SELECT b.*, u.wallet
+                FROM Battles b
+                JOIN Users u ON b.id_user = u.id_user
+                WHERE b.id_battle = %s
+            """, (battle_id,))
+            battle = cursor.fetchone()
+            
+            if not battle:
+                cursor.close()
+                conn.close()
+                return JSONResponse(
+                    status_code=404,
+                    content={"success": False, "error": "Battle not found"}
+                )
+            
+            # Проверяем, что пользователь имеет доступ к этому батлу
+            if wallet and battle['wallet'] != wallet:
+                cursor.close()
+                conn.close()
+                return JSONResponse(
+                    status_code=403,
+                    content={"success": False, "error": "Access denied"}
+                )
+            
+            import json
+            user_cards = json.loads(battle['user_cards']) if isinstance(battle['user_cards'], str) else battle['user_cards']
+            opponent_cards = json.loads(battle['bot_cards']) if isinstance(battle['bot_cards'], str) else battle['bot_cards']
+            
+            cursor.close()
+            conn.close()
+            
+            # Преобразуем winner для ответа (bot -> opponent)
+            winner_response = 'opponent' if battle.get('winner') == 'bot' else battle.get('winner')
+            
+            return {
+                "success": True,
+                "battle_id": battle_id,
+                "status": battle['status'],
+                "user_tickets": battle['user_tickets'],
+                "opponent_tickets": battle['bot_tickets'],
+                "winner": winner_response,
+                "user_cards": user_cards,
+                "opponent_cards": opponent_cards if battle['status'] == 'completed' else [],
+                "started_at": str(battle['started_at']),
+                "completed_at": str(battle['completed_at']) if battle['completed_at'] else None
+            }
+            
+        except Exception as e:
+            print(f"Get battle status error: {e}")
+            return JSONResponse(
+                status_code=500,
+                content={"success": False, "error": f"Internal error: {str(e)}"}
+            )
+    
     @app.get("/health")
     async def health_check():
         try:

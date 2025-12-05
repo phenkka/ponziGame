@@ -144,27 +144,127 @@
 
                     <section class="battle-section" style="margin-top: 4vh;">
                         <h2 class="packs-title">CARD BATTLES</h2>
+                        
                         <div class="battle-content">
                             <div class="battle-info">
-                                <p>Challenge other players to epic card battles! Choose up to 5 cards and fight for glory.</p>
-                                <div class="battle-rules">
-                                    <h3>Battle Rules:</h3>
-                                    <ul>
-                                        <li>Choose 1-5 cards for battle</li>
-                                        <li>Card power = effective tickets (after decay)</li>
-                                        <li>Winner takes all cards from loser</li>
-                                        <li>Battle duration: 30 seconds preparation + battle</li>
-                                    </ul>
-                                    <div style="margin-top: 12px; font-weight: 800; color: #9aa0ff;">
-                                        Participation fee: 0.01 SOL
-                                    </div>
-                                </div>
+                                        <p>Challenge other players to epic card battles! Choose up to 5 cards and fight for glory.</p>
+                                        <div class="battle-rules">
+                                            <h3>Battle Rules:</h3>
+                                            <ul>
+                                                <li>Choose 1-5 cards for battle</li>
+                                                <li>Card power = start_bounty (tickets)</li>
+                                                <li>Winner takes all cards from loser</li>
+                                            </ul>
+                                        </div>
                             </div>
                             <div class="battle-actions">
                                 <button id="start-battle-btn" class="btn btn-primary">START BATTLE</button>
                             </div>
                         </div>
                     </section>
+                    
+                    <!-- Battle Modal -->
+                    <div id="battle-modal-overlay" class="battle-modal-overlay hidden"></div>
+                    <div id="battle-modal" class="battle-modal hidden">
+                        <div class="battle-modal-content">
+                            <button class="battle-modal-close" id="battle-modal-close">&times;</button>
+                            
+                            <!-- Initial State: Start Battle -->
+                            <div id="battle-initial" class="battle-state">
+                                <div class="battle-content">
+                                    <div class="battle-info">
+                                        <p>Challenge other players to epic card battles! Choose up to 5 cards and fight for glory.</p>
+                                        <div class="battle-rules">
+                                            <h3>Battle Rules:</h3>
+                                            <ul>
+                                                <li>Choose 1-5 cards for battle</li>
+                                                <li>Card power = start_bounty (tickets)</li>
+                                                <li>Winner takes all cards from loser</li>
+                                            </ul>
+                                        </div>
+                                    </div>
+                                    <div class="battle-actions">
+                                        <button id="start-battle-btn-modal" class="btn btn-primary">START BATTLE</button>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <!-- Searching State -->
+                            <div id="battle-searching" class="battle-state hidden">
+                                <div class="battle-searching-content">
+                                    <div class="searching-animation">
+                                        <div class="searching-spinner"></div>
+                                        <h3>SEARCHING FOR OPPONENT...</h3>
+                                        <p class="search-hint">Finding the perfect match...</p>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <!-- Card Selection State -->
+                            <div id="battle-card-selection" class="battle-state hidden">
+                                <div class="battle-selection-content">
+                                    <h3>SELECT YOUR CARDS (1-5 cards)</h3>
+                                    <p class="selection-hint">Choose cards to battle. Total tickets: <span id="selected-tickets">0</span></p>
+                                    <div class="cards-selection-grid" id="cards-selection-grid">
+                                        <!-- Cards will be loaded here -->
+                                    </div>
+                                    <div class="selected-cards-preview" id="selected-cards-preview">
+                                        <h4>Selected Cards:</h4>
+                                        <div id="selected-cards-list"></div>
+                                    </div>
+                                    <div class="battle-actions">
+                                        <button id="confirm-cards-btn" class="btn btn-primary" disabled>CONFIRM SELECTION</button>
+                                        <button id="cancel-battle-btn" class="btn btn-secondary">CANCEL BATTLE</button>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <!-- Fighting State -->
+                            <div id="battle-fighting" class="battle-state hidden">
+                                <div class="battle-fighting-content">
+                                    <h3>BATTLE IN PROGRESS...</h3>
+                                    <div class="battle-comparison">
+                                        <div class="battle-side user-side">
+                                            <h4>YOU</h4>
+                                            <div class="battle-tickets" id="user-battle-tickets">0</div>
+                                            <div class="battle-cards-preview" id="user-battle-cards"></div>
+                                        </div>
+                                        <div class="battle-vs">VS</div>
+                                        <div class="battle-side opponent-side">
+                                            <h4>OPPONENT</h4>
+                                            <div class="battle-tickets" id="opponent-battle-tickets">0</div>
+                                            <div class="battle-cards-preview" id="opponent-battle-cards"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <!-- Result State -->
+                            <div id="battle-result" class="battle-state hidden">
+                                <div class="battle-result-content">
+                                    <h2 id="battle-result-text"></h2>
+                                    <div class="battle-comparison">
+                                        <div class="battle-side user-side">
+                                            <h4>YOU</h4>
+                                            <div class="battle-tickets" id="user-result-tickets">0</div>
+                                            <div class="battle-cards-preview" id="user-result-cards"></div>
+                                        </div>
+                                        <div class="battle-vs">VS</div>
+                                        <div class="battle-side opponent-side">
+                                            <h4>OPPONENT</h4>
+                                            <div class="battle-tickets" id="opponent-result-tickets">0</div>
+                                            <div class="battle-cards-preview" id="opponent-result-cards"></div>
+                                        </div>
+                                    </div>
+                                    <div id="battle-rewards"></div>
+                                    <div class="battle-actions">
+                                        <button id="new-battle-btn" class="btn btn-primary">NEW BATTLE</button>
+                                        <button id="close-battle-btn" class="btn btn-secondary">CLOSE</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                     <div class="shop-footer" style="margin-top: 12vh;">
                         <div class="footer-title">EVERY PULL DRAINS YOUR HOPE. EVERY TICKET FUELS YOUR LUCK.</div>
                         <div class="footer-links">
@@ -179,7 +279,7 @@
 
     <script src="scripts/main.js"></script>
     <script src="scripts/dynamic-menu.js"></script>
-    
+    <script src="scripts/battle.js"></script>
     <script src="scripts/page-init.js"></script>
 
     <!-- Purchase / Open Modal -->

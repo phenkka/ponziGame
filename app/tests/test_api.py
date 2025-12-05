@@ -2580,3 +2580,76 @@ class TestCardsTradeAPI:
             
             cursor.close()
 
+
+class TestConfigAPI:
+    """Тесты для эндпоинта /api/config"""
+    
+    @pytest.mark.asyncio
+    async def test_get_config_public(self):
+        """Тест: /api/config доступен без авторизации"""
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            response = await client.get("/api/config")
+            assert response.status_code == 200
+            data = response.json()
+            assert data["success"] is True
+            assert "rpcUrl" in data
+            assert "merchant" in data
+            assert "mint" in data
+    
+    @pytest.mark.asyncio
+    async def test_get_config_returns_valid_structure(self):
+        """Тест: /api/config возвращает правильную структуру данных"""
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            response = await client.get("/api/config")
+            assert response.status_code == 200
+            data = response.json()
+            
+            # Проверяем структуру
+            assert isinstance(data["rpcUrl"], str)
+            assert isinstance(data["merchant"], str)
+            assert isinstance(data["mint"], str) or data["mint"] is None
+            
+            # Проверяем, что merchant имеет дефолтное значение, если не настроен
+            if not data["merchant"] or data["merchant"] == "11111111111111111111111111111111":
+                # Это нормально для тестовой среды
+                pass
+
+
+class TestReferralRedirect:
+    """Тесты для реферального редиректа /ref/{ref_code}"""
+    
+    @pytest.mark.asyncio
+    async def test_referral_redirect_public(self):
+        """Тест: реферальный редирект доступен без авторизации"""
+        async with AsyncClient(app=app, base_url="http://test", follow_redirects=False) as client:
+            response = await client.get("/ref/TESTCODE")
+            # Редирект должен вернуть 307 или 301
+            assert response.status_code in [301, 302, 307, 308]
+    
+    @pytest.mark.asyncio
+    async def test_referral_redirect_to_home_with_query(self):
+        """Тест: реферальный редирект перенаправляет на главную с query параметром"""
+        async with AsyncClient(app=app, base_url="http://test", follow_redirects=False) as client:
+            ref_code = "TESTCODE123"
+            response = await client.get(f"/ref/{ref_code}")
+            
+            # Проверяем статус редиректа
+            assert response.status_code in [301, 302, 307, 308]
+            
+            # Проверяем Location header
+            location = response.headers.get("location")
+            assert location is not None
+            assert location == f"/?ref={ref_code}"
+    
+    @pytest.mark.asyncio
+    async def test_referral_redirect_with_special_characters(self):
+        """Тест: реферальный редирект работает с различными кодами"""
+        async with AsyncClient(app=app, base_url="http://test", follow_redirects=False) as client:
+            test_codes = ["ABC123", "XYZ789", "LONGCODE123456"]
+            
+            for ref_code in test_codes:
+                response = await client.get(f"/ref/{ref_code}")
+                assert response.status_code in [301, 302, 307, 308]
+                location = response.headers.get("location")
+                assert location == f"/?ref={ref_code}"
+

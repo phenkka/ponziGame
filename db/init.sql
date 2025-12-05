@@ -103,3 +103,19 @@ create table if not exists Super_jackpot_rounds(
     prize numeric(20,8) null,
     total_amount numeric(20,8) default 0 not null
 );
+
+create table if not exists Battles(
+    id_battle bigserial primary key,
+    id_user bigint not null references Users(id_user) on delete cascade,
+    status text not null default 'searching' check (status in ('searching', 'card_selection', 'fighting', 'completed', 'cancelled')),
+    user_cards jsonb not null default '[]',  -- [{id_card, quantity}, ...]
+    bot_cards jsonb not null default '[]',    -- [{id_card, quantity}, ...]
+    user_tickets int not null default 0,
+    bot_tickets int not null default 0,
+    winner text check (winner in ('user', 'bot')),
+    started_at timestamp default now(),
+    completed_at timestamp null
+);
+
+create index if not exists idx_battles_user on Battles(id_user);
+create index if not exists idx_battles_status on Battles(status);

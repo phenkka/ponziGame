@@ -70,6 +70,11 @@ function initBattlePage() {
                 showUserInfo(storedWallet, d.user.ref_code, { redirect: false });
                 loadJackpot(); // Load jackpot info
                 loadSuperJackpot(); // Load super jackpot info
+                
+                // Initialize battle system
+                if (typeof initBattle === 'function') {
+                    initBattle();
+                }
             }
         }).catch(e => console.error('Error loading user data:', e));
     } else {

@@ -101,8 +101,46 @@
             
             <div class="shop-layout">
                 <div class="shop-content">
-                    <!-- Jackpot carousel hidden on profile page -->
-                    <!-- <div class="jackpot-carousel"> ... </div> -->
+                    <!-- Animated jackpot container for non-home pages -->
+                    <div class="jackpot-carousel">
+                        <div class="jackpot-carousel-track">
+                            <!-- Current Jackpot -->
+                            <div class="jackpot-carousel-item active">
+                                <div class="jackpot-card">
+                                    <div class="jackpot-title">EVERYDAY LOTTERY</div>
+                                    <div class="jackpot-amount" id="rtj-amount-ref">Loading...</div>
+                                    <div class="jackpot-timer" id="rtj-timer-ref">Time Left: --:--:--</div>
+                                </div>
+                            </div>
+
+                            <!-- Last Jackpot -->
+                            <div class="jackpot-carousel-item">
+                                <div class="last-card">
+                                    <div class="last-header">
+                                        <div class="last-title">LAST JACKPOT</div>
+                                    </div>
+                                    <div class="last-prize-section">
+                                        <div class="last-subtitle">Prize pool:</div>
+                                        <div class="last-amount" id="lastj-amount-ref">0 $TOKENS</div>
+                                    </div>
+                                    <div class="last-winner-section" id="lastj-winner-ref" style="display: none;">
+                                        <div class="winner-wallet" style="color: #6E6BFF; font-size: 24px;">
+                                            Wallet winner: <span id="lastj-winner-wallet-ref">-</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Super Jackpot -->
+                            <div class="jackpot-carousel-item">
+                                <div class="super-jackpot-card">
+                                    <div class="super-jackpot-title">SUPER JACKPOT</div>
+                                    <div class="super-jackpot-amount" id="superj-amount-ref">0 $TOKENS</div>
+                                    <div class="super-jackpot-description">Collect all cards to win!</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
 
                     <section class="referral-section" style="margin-top: 4vh;">
                         <h2 class="packs-title">REFERRAL</h2>
