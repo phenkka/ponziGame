@@ -469,12 +469,24 @@ def get_random_card_by_rarity(rarity: str, cursor, exclude_card_ids: list = None
 
 
 def get_user_tickets(cursor, user_id: int) -> int:
-    """Подсчитывает общее количество tickets пользователя из всех его карт"""
+    """Подсчитывает общее количество tickets пользователя из всех его карт.
+    Учитываются только карты из КУПЛЕННЫХ паков, бонусные паки исключаются."""
     cursor.execute("""
         SELECT COALESCE(SUM(cu.quantity * c.start_bounty), 0) as total_tickets
         FROM Card_User cu
         JOIN Cards c ON cu.id_card = c.id_card
+        LEFT JOIN Chest_openings co ON cu.id_opening = co.id_opening
+        LEFT JOIN Chest_purchases cp ON co.id_purchase = cp.id_purchase
         WHERE cu.id_user = %s
+          AND (
+            -- Карты без связи с открытием (старые карты) - учитываем
+            cu.id_opening IS NULL
+            OR
+            -- Карты из купленных паков (tx_signature НЕ начинается с 'prediction_reward_' или 'daily_checkin_')
+            (cp.tx_signature IS NOT NULL 
+             AND cp.tx_signature NOT LIKE 'prediction_reward_%%'
+             AND cp.tx_signature NOT LIKE 'daily_checkin_%%')
+          )
     """, (user_id,))
     result = cursor.fetchone()
     return int(result["total_tickets"]) if result and result["total_tickets"] else 0
@@ -532,6 +544,7 @@ def save_tickets_snapshot(cursor, conn, round_id: int, snapshot_time):
     # Получаем всех пользователей с их tickets на момент snapshot_time
     # Используем только карты, которые были получены ДО окончания раунда
     # created_at в Card_User это date, а snapshot_time это timestamp, поэтому сравниваем даты
+    # Учитываются только карты из КУПЛЕННЫХ паков, бонусные паки исключаются
     from datetime import datetime
     if isinstance(snapshot_time, str):
         snapshot_time = datetime.fromisoformat(snapshot_time.replace('Z', '+00:00'))
@@ -543,7 +556,18 @@ def save_tickets_snapshot(cursor, conn, round_id: int, snapshot_time):
         FROM Users u
         INNER JOIN Card_User cu ON u.id_user = cu.id_user
         INNER JOIN Cards c ON cu.id_card = c.id_card
-        WHERE cu.created_at IS NULL OR cu.created_at <= %s
+        LEFT JOIN Chest_openings co ON cu.id_opening = co.id_opening
+        LEFT JOIN Chest_purchases cp ON co.id_purchase = cp.id_purchase
+        WHERE (cu.created_at IS NULL OR cu.created_at <= %s)
+          AND (
+            -- Карты без связи с открытием (старые карты) - учитываем
+            cu.id_opening IS NULL
+            OR
+            -- Карты из купленных паков (tx_signature НЕ начинается с 'prediction_reward_' или 'daily_checkin_')
+            (cp.tx_signature IS NOT NULL 
+             AND cp.tx_signature NOT LIKE 'prediction_reward_%%'
+             AND cp.tx_signature NOT LIKE 'daily_checkin_%%')
+          )
         GROUP BY u.id_user, u.wallet
         HAVING COALESCE(SUM(cu.quantity * c.start_bounty), 0) > 0
     """, (snapshot_date,))

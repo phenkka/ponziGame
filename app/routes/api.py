@@ -1285,14 +1285,6 @@ def setup_api_routes(app):
                     content={"success": False, "error": f"No cards found with rarity: {rarity}"}
                 )
             
-            # Добавляем карту пользователю (или увеличиваем quantity если уже есть)
-            cursor.execute("""
-                INSERT INTO Card_User (id_user, id_card, quantity)
-                VALUES (%s, %s, 1)
-                ON CONFLICT (id_user, id_card) 
-                DO UPDATE SET quantity = Card_User.quantity + 1
-            """, (purchase_data['id_user'], card['id_card']))
-            
             # Отмечаем пак как открытый
             cursor.execute("""
                 UPDATE Chest_purchases
@@ -1300,11 +1292,24 @@ def setup_api_routes(app):
                 WHERE id_purchase = %s
             """, (id_purchase,))
             
-            # Записываем в Chest_openings
+            # Записываем в Chest_openings и получаем id_opening
             cursor.execute("""
                 INSERT INTO Chest_openings (id_purchase, id_user, id_chest)
                 VALUES (%s, %s, %s)
+                RETURNING id_opening
             """, (id_purchase, purchase_data['id_user'], purchase_data['id_chest']))
+            opening_data = cursor.fetchone()
+            id_opening = opening_data['id_opening'] if opening_data else None
+            
+            # Добавляем карту пользователю (или увеличиваем quantity если уже есть)
+            # Связываем карту с открытием пака через id_opening
+            cursor.execute("""
+                INSERT INTO Card_User (id_user, id_card, quantity, id_opening)
+                VALUES (%s, %s, 1, %s)
+                ON CONFLICT (id_user, id_card) 
+                DO UPDATE SET quantity = Card_User.quantity + 1,
+                              id_opening = COALESCE(Card_User.id_opening, EXCLUDED.id_opening)
+            """, (purchase_data['id_user'], card['id_card'], id_opening))
             
             # Проверяем супер джекпот: собрал ли пользователь все карты?
             super_jackpot_result = claim_super_jackpot(cursor, conn, purchase_data['id_user'])
