@@ -140,7 +140,7 @@ function showUserInfo(wallet, refCode, opts = {}) {
   if (addrShort) addrShort.textContent = `${wallet.slice(0, 4)}...${wallet.slice(-4)}`;
   const ref = document.getElementById('ref-code-info');
   if (ref) ref.textContent = refCode;
-  loadBalance(wallet);
+  // loadBalance(wallet); // Закомментировано - скрываем баланс
   loadUserChests(wallet);
   const bal = document.getElementById('balance');
   if (bal) {
@@ -548,23 +548,23 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // User dropdown functionality
-  const userDropdownButton = document.getElementById('userDropdownButton');
-  const userDropdown = document.querySelector('.user-dropdown');
-  
-  if (userDropdownButton && userDropdown) {
-    userDropdownButton.addEventListener('click', (e) => {
-      e.stopPropagation();
-      userDropdown.classList.toggle('open');
-    });
-  }
-  
-  // Close dropdown when clicking outside
-  document.addEventListener('click', (e) => {
-    if (userDropdown && !userDropdown.contains(e.target)) {
-      userDropdown.classList.remove('open');
-    }
-  });
+  // User dropdown functionality - ЗАКОММЕНТИРОВАНО: скрываем раскрытие кошелька и баланс
+  // const userDropdownButton = document.getElementById('userDropdownButton');
+  // const userDropdown = document.querySelector('.user-dropdown');
+  // 
+  // if (userDropdownButton && userDropdown) {
+  //   userDropdownButton.addEventListener('click', (e) => {
+  //     e.stopPropagation();
+  //     userDropdown.classList.toggle('open');
+  //   });
+  // }
+  // 
+  // // Close dropdown when clicking outside
+  // document.addEventListener('click', (e) => {
+  //   if (userDropdown && !userDropdown.contains(e.target)) {
+  //     userDropdown.classList.remove('open');
+  //   }
+  // });
 
   const logoutBtn = document.getElementById('logoutButton');
   if (logoutBtn) logoutBtn.addEventListener('click', () => {
@@ -1370,6 +1370,7 @@ async function loadPacks(forShop = false) {
         <img src="img/${packImage}" alt="Pack ${chest.id_chest}" class="pack-image">
         <div class="pack-card">
           <div class="pack-name">${getPackLabel(chest.id_chest)}</div>
+          <!-- Закомментирована информация о паках
           <div class="pack-price">PRICE: ${Number(chest.price).toString()} $TOKENS</div>
           <div class="pack-rates">CARD DROP RATES: Common: ${chest.prob_common}%; Rare: ${chest.prob_rare}%; Epic: ${chest.prob_epic}%; Legendary: ${chest.prob_legendary}%${chest.chance_loss > 0 ? `; Loss: ${chest.chance_loss}%` : ''}</div>
           <div class="pack-quantity-selector">
@@ -1380,13 +1381,15 @@ async function loadPacks(forShop = false) {
             </div>
             <div class="quantity-total" data-id="${chest.id_chest}">Total: ${Number(chest.price).toString()} $TOKENS</div>
           </div>
-          <button class="pack-buy-btn" data-id="${chest.id_chest}">${currentWallet ? 'Buy' : 'Connect Phantom wallet'}</button>
+          -->
+          <button class="pack-buy-btn" data-id="${chest.id_chest}">Soon</button>
         </div>
       `;
       container.appendChild(el);
     });
     // Removed price increase info block on shop page per request
-    container.querySelectorAll('.pack-buy-btn').forEach(btn => btn.addEventListener('click', async () => { if (!currentWallet) { await connectWallet(); return; } const id = btn.getAttribute('data-id'); await purchaseChest(id, data.chests); }));
+    // Закомментировано - кнопка теперь показывает "Soon" и не работает
+    // container.querySelectorAll('.pack-buy-btn').forEach(btn => btn.addEventListener('click', async () => { if (!currentWallet) { await connectWallet(); return; } const id = btn.getAttribute('data-id'); await purchaseChest(id, data.chests); }));
     
     // Добавляем обработчики для кнопок количества
     container.querySelectorAll('.quantity-plus').forEach(btn => {
@@ -1436,8 +1439,9 @@ async function loadPacks(forShop = false) {
 }
 
 function updatePackButtons() {
-  const packButtons = document.querySelectorAll('.pack-buy-btn');
-  packButtons.forEach(btn => { btn.textContent = currentWallet ? 'Buy' : 'Connect Phantom wallet'; });
+  // Закомментировано - кнопки теперь всегда показывают "Soon"
+  // const packButtons = document.querySelectorAll('.pack-buy-btn');
+  // packButtons.forEach(btn => { btn.textContent = currentWallet ? 'Buy' : 'Connect Phantom wallet'; });
 }
 
 function updateQuantityTotal(id, price, container) {
@@ -1726,8 +1730,10 @@ async function loadMyPacks(wallet) {
         <img src="img/${packImage}" alt="Pack ${chest.id_chest}" class="pack-image">
         <div class="pack-card">
           <div class="pack-name">${getPackLabel(chest.id_chest)}</div>
+          <!-- Закомментирована информация о паках
           <div class="pack-price">PRICE: ${Number(chest.price).toString()} $TOKENS</div>
           <div class="pack-rates">CARD DROP RATES: Common: ${chest.prob_common}%; Rare: ${chest.prob_rare}%; Epic: ${chest.prob_epic}%; Legendary: ${chest.prob_legendary}%</div>
+          -->
           <button class="pack-buy-btn" data-open-chest="${chest.id_chest}">Open</button>
         </div>`;
       grid.appendChild(el);
