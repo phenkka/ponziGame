@@ -35,6 +35,7 @@ def db_connection():
                     password=os.getenv("POSTGRES_PASSWORD", "12345"),
                     port=os.getenv("POSTGRES_PORT", "5432")
                 )
+                _apply_migrations(conn)
                 yield conn
                 conn.close()
                 return
@@ -48,10 +49,63 @@ def db_connection():
             password=os.getenv("POSTGRES_PASSWORD", "12345"),
             port=os.getenv("POSTGRES_PORT", "5432")
         )
+        _apply_migrations(conn)
         yield conn
         conn.close()
     except Exception as e:
         pytest.skip(f"Database connection failed: {e}")
+
+def _apply_migrations(conn):
+    """Применяет миграции к тестовой БД"""
+    import pathlib
+    cursor = conn.cursor()
+    try:
+        # Получаем путь к папке миграций
+        project_root = pathlib.Path(__file__).parent.parent.parent
+        migrations_dir = project_root / "db" / "migrations"
+        
+        if not migrations_dir.exists():
+            # Если папка миграций не найдена, просто продолжаем
+            return
+        
+        # Получаем список миграций, отсортированных по номеру
+        migration_files = sorted(migrations_dir.glob("*.sql"), key=lambda x: x.name)
+        
+        for migration_file in migration_files:
+            try:
+                # Читаем SQL из файла
+                with open(migration_file, 'r', encoding='utf-8') as f:
+                    sql = f.read()
+                
+                # Применяем миграцию целиком (PostgreSQL обработает IF NOT EXISTS)
+                try:
+                    cursor.execute(sql)
+                    conn.commit()
+                except (psycopg2.errors.DuplicateTable, 
+                        psycopg2.errors.DuplicateColumn,
+                        psycopg2.errors.DuplicateObject,
+                        psycopg2.errors.UndefinedObject) as e:
+                    # Уже существует или объект не определен - это нормально
+                    conn.rollback()
+                    continue
+                except psycopg2.errors.SyntaxError as e:
+                    # Синтаксическая ошибка - пропускаем эту миграцию
+                    conn.rollback()
+                    continue
+            except Exception as e:
+                # Другие ошибки - возможно миграция уже применена
+                conn.rollback()
+                # Игнорируем ошибки для совместимости
+                continue
+    except Exception as e:
+        # Если не удалось применить миграции, просто продолжаем
+        # (миграции могут быть уже применены вручную)
+        try:
+            conn.rollback()
+        except:
+            pass
+    finally:
+        cursor.close()
 
 @pytest.fixture(scope="function")
 def clean_db(db_connection):
@@ -67,6 +121,12 @@ def clean_db(db_connection):
         cursor.execute("DELETE FROM Jackpot_tickets_snapshot")  # Очищаем snapshot tickets
         cursor.execute("DELETE FROM Jackpot_rounds")  # Очищаем раунды джекпота
         cursor.execute("DELETE FROM Super_jackpot_rounds")  # Очищаем раунды супер джекпота
+        cursor.execute("DELETE FROM User_boost")  # Очищаем boost
+        cursor.execute("DELETE FROM Daily_checkins")  # Очищаем чекины
+        cursor.execute("DELETE FROM Daily_codes")  # Очищаем коды (будут пересозданы при необходимости)
+        cursor.execute("DELETE FROM Battles")  # Очищаем батлы
+        cursor.execute("DELETE FROM User_bets")  # Очищаем ставки на пари
+        cursor.execute("DELETE FROM predictions")  # Очищаем пари
         cursor.execute("DELETE FROM Users")
         # Удаляем тестовые карты (с image_key, начинающимся с 'TEST_')
         # Сначала удаляем связанные записи в Card_User
@@ -99,6 +159,10 @@ def clean_db(db_connection):
         cursor.execute("DELETE FROM Jackpot_tickets_snapshot")  # Очищаем snapshot tickets
         cursor.execute("DELETE FROM Jackpot_rounds")  # Очищаем раунды джекпота
         cursor.execute("DELETE FROM Super_jackpot_rounds")  # Очищаем раунды супер джекпота
+        cursor.execute("DELETE FROM User_boost")  # Очищаем boost
+        cursor.execute("DELETE FROM Daily_checkins")  # Очищаем чекины
+        cursor.execute("DELETE FROM Daily_codes")  # Очищаем коды (будут пересозданы при необходимости)
+        cursor.execute("DELETE FROM Battles")  # Очищаем батлы
         cursor.execute("DELETE FROM Users")
         # Удаляем тестовые паки - дубликаты по параметрам (оставляем только первые 5 оригинальных)
         # Удаляем все паки, кроме первых 5 (оригинальные из insert.sql)

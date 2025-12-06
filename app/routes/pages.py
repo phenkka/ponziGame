@@ -16,19 +16,19 @@ def setup_page_routes(app):
     
     @app.get("/shop")
     async def shop_page(request: Request, auth: dict = Depends(verify_session_cookie)):
-        return FileResponse("public/coming-soon.html")
+        return FileResponse("public/shop.html")
 
     @app.get("/battle")
     async def battle_page(request: Request, auth: dict = Depends(verify_session_cookie)):
-        return FileResponse("public/coming-soon.html")
+        return FileResponse("public/battle.html")
 
     @app.get("/predict")
     async def predict_page(request: Request, auth: dict = Depends(verify_session_cookie)):
-        return FileResponse("public/coming-soon.html")
+        return FileResponse("public/predict.html")
 
     @app.get("/cards")
     async def cards_page(request: Request, auth: dict = Depends(verify_session_cookie)):
-        return FileResponse("public/coming-soon.html")
+        return FileResponse("public/cards.html")
 
     @app.get("/profile")
     async def profile_page(request: Request, auth: dict = Depends(verify_session_cookie)):

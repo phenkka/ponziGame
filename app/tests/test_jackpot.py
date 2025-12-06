@@ -1134,3 +1134,704 @@ class TestJackpotPrizeCalculation:
                 f"Prize should be 100% of {total_amount}, got {prize['prize_amount']}, expected {expected_prize}"
         
         cursor.close()
+
+
+class TestJackpotBonusPacksExclusion:
+    """Тесты для исключения бонусных паков из джекпота"""
+    
+    @pytest.mark.asyncio
+    async def test_purchased_pack_cards_count_in_tickets(self, clean_db, db_connection, auth_headers):
+        """Тест: карты из купленных паков учитываются в tickets"""
+        if db_connection is None:
+            pytest.skip("Database not available")
+        
+        wallet = auth_headers["X-Wallet"]
+        
+        # Создаем пользователя
+        cursor = db_connection.cursor(cursor_factory=RealDictCursor)
+        cursor.execute(
+            "INSERT INTO Users (wallet, ref_code) VALUES (%s, %s) ON CONFLICT (wallet) DO UPDATE SET ref_code = EXCLUDED.ref_code RETURNING id_user",
+            (wallet, f"TESTCODE_PURCHASED_{wallet[:8]}")
+        )
+        user = cursor.fetchone()
+        user_id = user["id_user"]
+        
+        # Создаем пак
+        cursor.execute("""
+            INSERT INTO Chests (price, prob_common, prob_rare, prob_epic, prob_legendary, chance_loss)
+            VALUES (100, 50, 30, 15, 5, 0)
+            RETURNING id_chest
+        """)
+        chest = cursor.fetchone()
+        chest_id = chest["id_chest"]
+        
+        # Создаем карту с start_bounty = 50
+        cursor.execute("""
+            INSERT INTO Cards (rarity, start_bounty, name, image_url, image_key)
+            VALUES ('basic', 50, 'Purchased Card', 'test.png', 'TEST_PURCHASED_CARD')
+            ON CONFLICT (image_key) DO NOTHING
+            RETURNING id_card
+        """)
+        card = cursor.fetchone()
+        if not card:
+            cursor.execute("SELECT id_card FROM Cards WHERE image_key = 'TEST_PURCHASED_CARD'")
+            card = cursor.fetchone()
+        card_id = card["id_card"]
+        
+        # Создаем покупку с обычным tx_signature (купленный пак)
+        cursor.execute("""
+            INSERT INTO Chest_purchases (id_user, id_chest, tx_signature)
+            VALUES (%s, %s, 'real_tx_signature_123')
+            RETURNING id_purchase
+        """, (user_id, chest_id))
+        purchase = cursor.fetchone()
+        purchase_id = purchase["id_purchase"]
+        
+        # Создаем открытие пака
+        cursor.execute("""
+            INSERT INTO Chest_openings (id_purchase, id_user, id_chest)
+            VALUES (%s, %s, %s)
+            RETURNING id_opening
+        """, (purchase_id, user_id, chest_id))
+        opening = cursor.fetchone()
+        id_opening = opening["id_opening"]
+        
+        # Добавляем карту с привязкой к открытию
+        cursor.execute("""
+            INSERT INTO Card_User (id_user, id_card, quantity, id_opening)
+            VALUES (%s, %s, 1, %s)
+            ON CONFLICT (id_user, id_card) DO UPDATE SET quantity = Card_User.quantity + 1
+        """, (user_id, card_id, id_opening))
+        db_connection.commit()
+        cursor.close()
+        
+        # Проверяем, что тикеты считаются (карта из купленного пака)
+        cursor = db_connection.cursor(cursor_factory=RealDictCursor)
+        tickets = get_user_tickets(cursor, user_id)
+        assert tickets == 50, f"Expected 50 tickets for purchased pack card, got {tickets}"
+        cursor.close()
+    
+    @pytest.mark.asyncio
+    async def test_prediction_reward_pack_cards_excluded_from_tickets(self, clean_db, db_connection):
+        """Тест: карты из бонусных паков (prediction_reward) НЕ учитываются в tickets"""
+        if db_connection is None:
+            pytest.skip("Database not available")
+        
+        cursor = db_connection.cursor(cursor_factory=RealDictCursor)
+        
+        # Создаем пользователя
+        unique_id = str(uuid.uuid4())[:8]
+        cursor.execute("""
+            INSERT INTO Users (wallet, ref_code) VALUES (%s, %s)
+            RETURNING id_user
+        """, (f'bonus_user_{unique_id}', f'REF_BONUS_{unique_id}'))
+        user = cursor.fetchone()
+        user_id = user["id_user"]
+        
+        # Создаем пак
+        cursor.execute("""
+            INSERT INTO Chests (price, prob_common, prob_rare, prob_epic, prob_legendary, chance_loss)
+            VALUES (100, 50, 30, 15, 5, 0)
+            RETURNING id_chest
+        """)
+        chest = cursor.fetchone()
+        chest_id = chest["id_chest"]
+        
+        # Создаем карту с start_bounty = 100
+        cursor.execute("""
+            INSERT INTO Cards (rarity, start_bounty, name, image_url, image_key)
+            VALUES ('rare', 100, 'Bonus Card', 'test.png', %s)
+            ON CONFLICT (image_key) DO NOTHING
+            RETURNING id_card
+        """, (f'TEST_BONUS_CARD_{unique_id}',))
+        card = cursor.fetchone()
+        if not card:
+            cursor.execute("SELECT id_card FROM Cards WHERE image_key = %s", (f'TEST_BONUS_CARD_{unique_id}',))
+            card = cursor.fetchone()
+        card_id = card["id_card"]
+        
+        # Создаем покупку с tx_signature вида prediction_reward_ (бонусный пак)
+        cursor.execute("""
+            INSERT INTO Chest_purchases (id_user, id_chest, tx_signature)
+            VALUES (%s, %s, 'prediction_reward_123456')
+            RETURNING id_purchase
+        """, (user_id, chest_id))
+        purchase = cursor.fetchone()
+        purchase_id = purchase["id_purchase"]
+        
+        # Создаем открытие пака
+        cursor.execute("""
+            INSERT INTO Chest_openings (id_purchase, id_user, id_chest)
+            VALUES (%s, %s, %s)
+            RETURNING id_opening
+        """, (purchase_id, user_id, chest_id))
+        opening = cursor.fetchone()
+        id_opening = opening["id_opening"]
+        
+        # Добавляем карту с привязкой к открытию бонусного пака
+        cursor.execute("""
+            INSERT INTO Card_User (id_user, id_card, quantity, id_opening)
+            VALUES (%s, %s, 1, %s)
+            ON CONFLICT (id_user, id_card) DO UPDATE SET quantity = Card_User.quantity + 1
+        """, (user_id, card_id, id_opening))
+        db_connection.commit()
+        cursor.close()
+        
+        # Проверяем, что тикеты НЕ считаются (карта из бонусного пака)
+        cursor = db_connection.cursor(cursor_factory=RealDictCursor)
+        tickets = get_user_tickets(cursor, user_id)
+        assert tickets == 0, f"Expected 0 tickets for bonus pack card, got {tickets}"
+        cursor.close()
+    
+    @pytest.mark.asyncio
+    async def test_daily_checkin_pack_cards_excluded_from_tickets(self, clean_db, db_connection):
+        """Тест: карты из бонусных паков (daily_checkin) НЕ учитываются в tickets"""
+        if db_connection is None:
+            pytest.skip("Database not available")
+        
+        cursor = db_connection.cursor(cursor_factory=RealDictCursor)
+        
+        # Создаем пользователя
+        unique_id = str(uuid.uuid4())[:8]
+        cursor.execute("""
+            INSERT INTO Users (wallet, ref_code) VALUES (%s, %s)
+            RETURNING id_user
+        """, (f'checkin_user_{unique_id}', f'REF_CHECKIN_{unique_id}'))
+        user = cursor.fetchone()
+        user_id = user["id_user"]
+        
+        # Создаем пак
+        cursor.execute("""
+            INSERT INTO Chests (price, prob_common, prob_rare, prob_epic, prob_legendary, chance_loss)
+            VALUES (100, 50, 30, 15, 5, 0)
+            RETURNING id_chest
+        """)
+        chest = cursor.fetchone()
+        chest_id = chest["id_chest"]
+        
+        # Создаем карту с start_bounty = 200
+        cursor.execute("""
+            INSERT INTO Cards (rarity, start_bounty, name, image_url, image_key)
+            VALUES ('epic', 200, 'Checkin Card', 'test.png', %s)
+            ON CONFLICT (image_key) DO NOTHING
+            RETURNING id_card
+        """, (f'TEST_CHECKIN_CARD_{unique_id}',))
+        card = cursor.fetchone()
+        if not card:
+            cursor.execute("SELECT id_card FROM Cards WHERE image_key = %s", (f'TEST_CHECKIN_CARD_{unique_id}',))
+            card = cursor.fetchone()
+        card_id = card["id_card"]
+        
+        # Создаем покупку с tx_signature вида daily_checkin_ (бонусный пак)
+        cursor.execute("""
+            INSERT INTO Chest_purchases (id_user, id_chest, tx_signature)
+            VALUES (%s, %s, 'daily_checkin_123456_20231206')
+            RETURNING id_purchase
+        """, (user_id, chest_id))
+        purchase = cursor.fetchone()
+        purchase_id = purchase["id_purchase"]
+        
+        # Создаем открытие пака
+        cursor.execute("""
+            INSERT INTO Chest_openings (id_purchase, id_user, id_chest)
+            VALUES (%s, %s, %s)
+            RETURNING id_opening
+        """, (purchase_id, user_id, chest_id))
+        opening = cursor.fetchone()
+        id_opening = opening["id_opening"]
+        
+        # Добавляем карту с привязкой к открытию бонусного пака
+        cursor.execute("""
+            INSERT INTO Card_User (id_user, id_card, quantity, id_opening)
+            VALUES (%s, %s, 1, %s)
+            ON CONFLICT (id_user, id_card) DO UPDATE SET quantity = Card_User.quantity + 1
+        """, (user_id, card_id, id_opening))
+        db_connection.commit()
+        cursor.close()
+        
+        # Проверяем, что тикеты НЕ считаются (карта из бонусного пака)
+        cursor = db_connection.cursor(cursor_factory=RealDictCursor)
+        tickets = get_user_tickets(cursor, user_id)
+        assert tickets == 0, f"Expected 0 tickets for daily checkin pack card, got {tickets}"
+        cursor.close()
+    
+    @pytest.mark.asyncio
+    async def test_old_cards_without_id_opening_count_in_tickets(self, clean_db, db_connection):
+        """Тест: старые карты без id_opening учитываются в tickets (обратная совместимость)"""
+        if db_connection is None:
+            pytest.skip("Database not available")
+        
+        cursor = db_connection.cursor(cursor_factory=RealDictCursor)
+        
+        # Создаем пользователя
+        unique_id = str(uuid.uuid4())[:8]
+        cursor.execute("""
+            INSERT INTO Users (wallet, ref_code) VALUES (%s, %s)
+            RETURNING id_user
+        """, (f'old_user_{unique_id}', f'REF_OLD_{unique_id}'))
+        user = cursor.fetchone()
+        user_id = user["id_user"]
+        
+        # Создаем карту с start_bounty = 75
+        cursor.execute("""
+            INSERT INTO Cards (rarity, start_bounty, name, image_url, image_key)
+            VALUES ('basic', 75, 'Old Card', 'test.png', %s)
+            ON CONFLICT (image_key) DO NOTHING
+            RETURNING id_card
+        """, (f'TEST_OLD_CARD_{unique_id}',))
+        card = cursor.fetchone()
+        if not card:
+            cursor.execute("SELECT id_card FROM Cards WHERE image_key = %s", (f'TEST_OLD_CARD_{unique_id}',))
+            card = cursor.fetchone()
+        card_id = card["id_card"]
+        
+        # Добавляем карту БЕЗ id_opening (старая карта)
+        cursor.execute("""
+            INSERT INTO Card_User (id_user, id_card, quantity, id_opening)
+            VALUES (%s, %s, 1, NULL)
+            ON CONFLICT (id_user, id_card) DO UPDATE SET quantity = Card_User.quantity + 1
+        """, (user_id, card_id,))
+        db_connection.commit()
+        cursor.close()
+        
+        # Проверяем, что тикеты считаются (старая карта учитывается)
+        cursor = db_connection.cursor(cursor_factory=RealDictCursor)
+        tickets = get_user_tickets(cursor, user_id)
+        assert tickets == 75, f"Expected 75 tickets for old card without id_opening, got {tickets}"
+        cursor.close()
+    
+    @pytest.mark.asyncio
+    async def test_mixed_purchased_and_bonus_packs(self, clean_db, db_connection, auth_headers):
+        """Тест: смешанный случай - у пользователя есть и купленные, и бонусные паки"""
+        if db_connection is None:
+            pytest.skip("Database not available")
+        
+        wallet = auth_headers["X-Wallet"]
+        
+        # Создаем пользователя
+        cursor = db_connection.cursor(cursor_factory=RealDictCursor)
+        cursor.execute(
+            "INSERT INTO Users (wallet, ref_code) VALUES (%s, %s) ON CONFLICT (wallet) DO UPDATE SET ref_code = EXCLUDED.ref_code RETURNING id_user",
+            (wallet, f"TESTCODE_MIXED_{wallet[:8]}")
+        )
+        user = cursor.fetchone()
+        user_id = user["id_user"]
+        
+        # Создаем пак
+        cursor.execute("""
+            INSERT INTO Chests (price, prob_common, prob_rare, prob_epic, prob_legendary, chance_loss)
+            VALUES (100, 50, 30, 15, 5, 0)
+            RETURNING id_chest
+        """)
+        chest = cursor.fetchone()
+        chest_id = chest["id_chest"]
+        
+        # Создаем карты
+        cursor.execute("""
+            INSERT INTO Cards (rarity, start_bounty, name, image_url, image_key)
+            VALUES 
+            ('basic', 50, 'Purchased Card', 'test1.png', 'TEST_MIXED_PURCHASED'),
+            ('rare', 100, 'Bonus Card 1', 'test2.png', 'TEST_MIXED_BONUS1'),
+            ('epic', 150, 'Bonus Card 2', 'test3.png', 'TEST_MIXED_BONUS2')
+            ON CONFLICT (image_key) DO NOTHING
+            RETURNING id_card, image_key
+        """)
+        cards = cursor.fetchall()
+        if len(cards) < 3:
+            cursor.execute("SELECT id_card, image_key FROM Cards WHERE image_key IN ('TEST_MIXED_PURCHASED', 'TEST_MIXED_BONUS1', 'TEST_MIXED_BONUS2')")
+            cards = cursor.fetchall()
+        
+        card_purchased_id = next(c['id_card'] for c in cards if c['image_key'] == 'TEST_MIXED_PURCHASED')
+        card_bonus1_id = next(c['id_card'] for c in cards if c['image_key'] == 'TEST_MIXED_BONUS1')
+        card_bonus2_id = next(c['id_card'] for c in cards if c['image_key'] == 'TEST_MIXED_BONUS2')
+        
+        # 1. Купленный пак
+        cursor.execute("""
+            INSERT INTO Chest_purchases (id_user, id_chest, tx_signature)
+            VALUES (%s, %s, 'real_tx_purchased_123')
+            RETURNING id_purchase
+        """, (user_id, chest_id))
+        purchase_purchased = cursor.fetchone()
+        purchase_purchased_id = purchase_purchased["id_purchase"]
+        
+        cursor.execute("""
+            INSERT INTO Chest_openings (id_purchase, id_user, id_chest)
+            VALUES (%s, %s, %s)
+            RETURNING id_opening
+        """, (purchase_purchased_id, user_id, chest_id))
+        opening_purchased = cursor.fetchone()
+        id_opening_purchased = opening_purchased["id_opening"]
+        
+        cursor.execute("""
+            INSERT INTO Card_User (id_user, id_card, quantity, id_opening)
+            VALUES (%s, %s, 1, %s)
+            ON CONFLICT (id_user, id_card) DO UPDATE SET quantity = Card_User.quantity + 1
+        """, (user_id, card_purchased_id, id_opening_purchased))
+        
+        # 2. Бонусный пак (prediction_reward)
+        cursor.execute("""
+            INSERT INTO Chest_purchases (id_user, id_chest, tx_signature)
+            VALUES (%s, %s, 'prediction_reward_456')
+            RETURNING id_purchase
+        """, (user_id, chest_id))
+        purchase_bonus1 = cursor.fetchone()
+        purchase_bonus1_id = purchase_bonus1["id_purchase"]
+        
+        cursor.execute("""
+            INSERT INTO Chest_openings (id_purchase, id_user, id_chest)
+            VALUES (%s, %s, %s)
+            RETURNING id_opening
+        """, (purchase_bonus1_id, user_id, chest_id))
+        opening_bonus1 = cursor.fetchone()
+        id_opening_bonus1 = opening_bonus1["id_opening"]
+        
+        cursor.execute("""
+            INSERT INTO Card_User (id_user, id_card, quantity, id_opening)
+            VALUES (%s, %s, 1, %s)
+            ON CONFLICT (id_user, id_card) DO UPDATE SET quantity = Card_User.quantity + 1
+        """, (user_id, card_bonus1_id, id_opening_bonus1))
+        
+        # 3. Бонусный пак (daily_checkin)
+        cursor.execute("""
+            INSERT INTO Chest_purchases (id_user, id_chest, tx_signature)
+            VALUES (%s, %s, 'daily_checkin_789')
+            RETURNING id_purchase
+        """, (user_id, chest_id))
+        purchase_bonus2 = cursor.fetchone()
+        purchase_bonus2_id = purchase_bonus2["id_purchase"]
+        
+        cursor.execute("""
+            INSERT INTO Chest_openings (id_purchase, id_user, id_chest)
+            VALUES (%s, %s, %s)
+            RETURNING id_opening
+        """, (purchase_bonus2_id, user_id, chest_id))
+        opening_bonus2 = cursor.fetchone()
+        id_opening_bonus2 = opening_bonus2["id_opening"]
+        
+        cursor.execute("""
+            INSERT INTO Card_User (id_user, id_card, quantity, id_opening)
+            VALUES (%s, %s, 1, %s)
+            ON CONFLICT (id_user, id_card) DO UPDATE SET quantity = Card_User.quantity + 1
+        """, (user_id, card_bonus2_id, id_opening_bonus2))
+        
+        db_connection.commit()
+        cursor.close()
+        
+        # Проверяем, что учитывается только карта из купленного пака (50 tickets)
+        cursor = db_connection.cursor(cursor_factory=RealDictCursor)
+        tickets = get_user_tickets(cursor, user_id)
+        assert tickets == 50, f"Expected 50 tickets (only purchased pack), got {tickets}. Bonus packs should be excluded."
+        cursor.close()
+    
+    @pytest.mark.asyncio
+    async def test_save_tickets_snapshot_excludes_bonus_packs(self, clean_db, db_connection):
+        """Тест: save_tickets_snapshot исключает карты из бонусных паков"""
+        if db_connection is None:
+            pytest.skip("Database not available")
+        
+        from core.utils import save_tickets_snapshot
+        
+        cursor = db_connection.cursor(cursor_factory=RealDictCursor)
+        
+        # Создаем двух пользователей
+        unique_id = str(uuid.uuid4())[:8]
+        cursor.execute("""
+            INSERT INTO Users (wallet, ref_code) VALUES 
+            (%s, %s),
+            (%s, %s)
+            RETURNING id_user, wallet
+        """, (f'user_purchased_{unique_id}', f'REF_PURCHASED_{unique_id}',
+              f'user_bonus_{unique_id}', f'REF_BONUS_{unique_id}'))
+        users = cursor.fetchall()
+        user_purchased_id = users[0]["id_user"]
+        user_bonus_id = users[1]["id_user"]
+        
+        # Создаем пак
+        cursor.execute("""
+            INSERT INTO Chests (price, prob_common, prob_rare, prob_epic, prob_legendary, chance_loss)
+            VALUES (100, 50, 30, 15, 5, 0)
+            RETURNING id_chest
+        """)
+        chest = cursor.fetchone()
+        chest_id = chest["id_chest"]
+        
+        # Создаем карты
+        cursor.execute("""
+            INSERT INTO Cards (rarity, start_bounty, name, image_url, image_key)
+            VALUES 
+            ('basic', 50, 'Purchased Card', 'test1.png', %s),
+            ('rare', 100, 'Bonus Card', 'test2.png', %s)
+            ON CONFLICT (image_key) DO NOTHING
+            RETURNING id_card, image_key
+        """, (f'TEST_SNAPSHOT_PURCHASED_{unique_id}', f'TEST_SNAPSHOT_BONUS_{unique_id}'))
+        cards = cursor.fetchall()
+        if len(cards) < 2:
+            cursor.execute("SELECT id_card, image_key FROM Cards WHERE image_key IN (%s, %s)", 
+                         (f'TEST_SNAPSHOT_PURCHASED_{unique_id}', f'TEST_SNAPSHOT_BONUS_{unique_id}'))
+            cards = cursor.fetchall()
+        
+        card_purchased_id = next(c['id_card'] for c in cards if 'PURCHASED' in c['image_key'])
+        card_bonus_id = next(c['id_card'] for c in cards if 'BONUS' in c['image_key'])
+        
+        # Пользователь 1: купленный пак
+        cursor.execute("""
+            INSERT INTO Chest_purchases (id_user, id_chest, tx_signature)
+            VALUES (%s, %s, 'real_tx_snapshot_123')
+            RETURNING id_purchase
+        """, (user_purchased_id, chest_id))
+        purchase_purchased = cursor.fetchone()
+        purchase_purchased_id = purchase_purchased["id_purchase"]
+        
+        cursor.execute("""
+            INSERT INTO Chest_openings (id_purchase, id_user, id_chest)
+            VALUES (%s, %s, %s)
+            RETURNING id_opening
+        """, (purchase_purchased_id, user_purchased_id, chest_id))
+        opening_purchased = cursor.fetchone()
+        id_opening_purchased = opening_purchased["id_opening"]
+        
+        cursor.execute("""
+            INSERT INTO Card_User (id_user, id_card, quantity, id_opening)
+            VALUES (%s, %s, 1, %s)
+            ON CONFLICT (id_user, id_card) DO UPDATE SET quantity = Card_User.quantity + 1
+        """, (user_purchased_id, card_purchased_id, id_opening_purchased))
+        
+        # Пользователь 2: бонусный пак
+        cursor.execute("""
+            INSERT INTO Chest_purchases (id_user, id_chest, tx_signature)
+            VALUES (%s, %s, 'prediction_reward_snapshot_456')
+            RETURNING id_purchase
+        """, (user_bonus_id, chest_id))
+        purchase_bonus = cursor.fetchone()
+        purchase_bonus_id = purchase_bonus["id_purchase"]
+        
+        cursor.execute("""
+            INSERT INTO Chest_openings (id_purchase, id_user, id_chest)
+            VALUES (%s, %s, %s)
+            RETURNING id_opening
+        """, (purchase_bonus_id, user_bonus_id, chest_id))
+        opening_bonus = cursor.fetchone()
+        id_opening_bonus = opening_bonus["id_opening"]
+        
+        cursor.execute("""
+            INSERT INTO Card_User (id_user, id_card, quantity, id_opening)
+            VALUES (%s, %s, 1, %s)
+            ON CONFLICT (id_user, id_card) DO UPDATE SET quantity = Card_User.quantity + 1
+        """, (user_bonus_id, card_bonus_id, id_opening_bonus))
+        
+        # Создаем раунд
+        started_at = datetime.now()
+        ends_at = started_at + timedelta(hours=24)
+        cursor.execute("""
+            INSERT INTO Jackpot_rounds (started_at, ends_at, status, total_amount)
+            VALUES (%s, %s, 'active', 1000)
+            RETURNING id_round
+        """, (started_at, ends_at))
+        round_data = cursor.fetchone()
+        round_id = round_data["id_round"]
+        db_connection.commit()
+        
+        # Сохраняем snapshot (используем тот же курсор)
+        conn = db_connection
+        save_tickets_snapshot(cursor, conn, round_id, ends_at)
+        
+        # Проверяем snapshot - должен быть только пользователь с купленным паком
+        # Используем тот же курсор (функция не закрывает его)
+        cursor.execute("""
+            SELECT id_user, tickets_count FROM Jackpot_tickets_snapshot WHERE id_round = %s
+        """, (round_id,))
+        snapshots = cursor.fetchall()
+        
+        # Должен быть только пользователь с купленным паком (50 tickets)
+        assert len(snapshots) == 1, f"Expected 1 user in snapshot, got {len(snapshots)}"
+        assert snapshots[0]["id_user"] == user_purchased_id, "Expected user with purchased pack"
+        assert snapshots[0]["tickets_count"] == 50, f"Expected 50 tickets, got {snapshots[0]['tickets_count']}"
+        
+        # Пользователь с бонусным паком не должен быть в snapshot
+        user_bonus_in_snapshot = any(s["id_user"] == user_bonus_id for s in snapshots)
+        assert not user_bonus_in_snapshot, "User with bonus pack should not be in snapshot"
+        cursor.close()
+    
+    @pytest.mark.asyncio
+    async def test_jackpot_draw_excludes_bonus_packs(self, clean_db, db_connection):
+        """Тест: розыгрыш джекпота исключает карты из бонусных паков"""
+        if db_connection is None:
+            pytest.skip("Database not available")
+        
+        cursor = db_connection.cursor(cursor_factory=RealDictCursor)
+        
+        # Создаем двух пользователей
+        unique_id = str(uuid.uuid4())[:8]
+        cursor.execute("""
+            INSERT INTO Users (wallet, ref_code) VALUES 
+            (%s, %s),
+            (%s, %s)
+            RETURNING id_user, wallet
+        """, (f'user_purchased_draw_{unique_id}', f'REF_PURCHASED_DRAW_{unique_id}',
+              f'user_bonus_draw_{unique_id}', f'REF_BONUS_DRAW_{unique_id}'))
+        users = cursor.fetchall()
+        user_purchased_id = users[0]["id_user"]
+        user_bonus_id = users[1]["id_user"]
+        
+        # Создаем пак
+        cursor.execute("""
+            INSERT INTO Chests (price, prob_common, prob_rare, prob_epic, prob_legendary, chance_loss)
+            VALUES (100, 50, 30, 15, 5, 0)
+            RETURNING id_chest
+        """)
+        chest = cursor.fetchone()
+        chest_id = chest["id_chest"]
+        
+        # Создаем карты
+        cursor.execute("""
+            INSERT INTO Cards (rarity, start_bounty, name, image_url, image_key)
+            VALUES 
+            ('basic', 10, 'Purchased Card', 'test1.png', %s),
+            ('legendary', 1000, 'Bonus Card', 'test2.png', %s)
+            ON CONFLICT (image_key) DO NOTHING
+            RETURNING id_card, image_key
+        """, (f'TEST_DRAW_PURCHASED_{unique_id}', f'TEST_DRAW_BONUS_{unique_id}'))
+        cards = cursor.fetchall()
+        if len(cards) < 2:
+            cursor.execute("SELECT id_card, image_key FROM Cards WHERE image_key IN (%s, %s)", 
+                         (f'TEST_DRAW_PURCHASED_{unique_id}', f'TEST_DRAW_BONUS_{unique_id}'))
+            cards = cursor.fetchall()
+        
+        card_purchased_id = next(c['id_card'] for c in cards if 'PURCHASED' in c['image_key'])
+        card_bonus_id = next(c['id_card'] for c in cards if 'BONUS' in c['image_key'])
+        
+        # Пользователь 1: купленный пак (10 tickets)
+        cursor.execute("""
+            INSERT INTO Chest_purchases (id_user, id_chest, tx_signature)
+            VALUES (%s, %s, 'real_tx_draw_123')
+            RETURNING id_purchase
+        """, (user_purchased_id, chest_id))
+        purchase_purchased = cursor.fetchone()
+        purchase_purchased_id = purchase_purchased["id_purchase"]
+        
+        cursor.execute("""
+            INSERT INTO Chest_openings (id_purchase, id_user, id_chest)
+            VALUES (%s, %s, %s)
+            RETURNING id_opening
+        """, (purchase_purchased_id, user_purchased_id, chest_id))
+        opening_purchased = cursor.fetchone()
+        id_opening_purchased = opening_purchased["id_opening"]
+        
+        cursor.execute("""
+            INSERT INTO Card_User (id_user, id_card, quantity, id_opening)
+            VALUES (%s, %s, 1, %s)
+            ON CONFLICT (id_user, id_card) DO UPDATE SET quantity = Card_User.quantity + 1
+        """, (user_purchased_id, card_purchased_id, id_opening_purchased))
+        
+        # Пользователь 2: бонусный пак (1000 tickets, но не должны учитываться)
+        cursor.execute("""
+            INSERT INTO Chest_purchases (id_user, id_chest, tx_signature)
+            VALUES (%s, %s, 'prediction_reward_draw_456')
+            RETURNING id_purchase
+        """, (user_bonus_id, chest_id))
+        purchase_bonus = cursor.fetchone()
+        purchase_bonus_id = purchase_bonus["id_purchase"]
+        
+        cursor.execute("""
+            INSERT INTO Chest_openings (id_purchase, id_user, id_chest)
+            VALUES (%s, %s, %s)
+            RETURNING id_opening
+        """, (purchase_bonus_id, user_bonus_id, chest_id))
+        opening_bonus = cursor.fetchone()
+        id_opening_bonus = opening_bonus["id_opening"]
+        
+        cursor.execute("""
+            INSERT INTO Card_User (id_user, id_card, quantity, id_opening)
+            VALUES (%s, %s, 1, %s)
+            ON CONFLICT (id_user, id_card) DO UPDATE SET quantity = Card_User.quantity + 1
+        """, (user_bonus_id, card_bonus_id, id_opening_bonus))
+        
+        # Создаем истекший раунд
+        started_at = datetime.now() - timedelta(hours=25)
+        ends_at = datetime.now() - timedelta(hours=1)
+        cursor.execute("""
+            INSERT INTO Jackpot_rounds (started_at, ends_at, status, total_amount)
+            VALUES (%s, %s, 'active', 1000)
+            RETURNING id_round
+        """, (started_at, ends_at))
+        round_data = cursor.fetchone()
+        round_id = round_data["id_round"]
+        db_connection.commit()
+        
+        # Проводим розыгрыш (используем тот же курсор)
+        conn = db_connection
+        draw_jackpot(cursor, conn)
+        
+        # Проверяем результат - победитель должен быть только пользователь с купленным паком
+        # Используем тот же курсор (функция не закрывает его)
+        cursor.execute("SELECT winner_user_id FROM Jackpot_rounds WHERE id_round = %s", (round_id,))
+        winner = cursor.fetchone()
+        assert winner is not None, "Round should have a winner"
+        assert winner["winner_user_id"] == user_purchased_id, \
+            f"Winner should be user with purchased pack (id={user_purchased_id}), got {winner['winner_user_id']}"
+        
+        # Проверяем snapshot - должен быть только пользователь с купленным паком
+        cursor.execute("""
+            SELECT id_user, tickets_count FROM Jackpot_tickets_snapshot WHERE id_round = %s
+        """, (round_id,))
+        snapshots = cursor.fetchall()
+        assert len(snapshots) == 1, f"Expected 1 user in snapshot, got {len(snapshots)}"
+        assert snapshots[0]["id_user"] == user_purchased_id
+        assert snapshots[0]["tickets_count"] == 10, f"Expected 10 tickets, got {snapshots[0]['tickets_count']}"
+        cursor.close()
+    
+    @pytest.mark.asyncio
+    async def test_card_with_id_opening_but_no_chest_purchase(self, clean_db, db_connection):
+        """Тест: edge case - карта с id_opening, но без связи с Chest_purchases"""
+        if db_connection is None:
+            pytest.skip("Database not available")
+        
+        cursor = db_connection.cursor(cursor_factory=RealDictCursor)
+        
+        # Создаем пользователя
+        unique_id = str(uuid.uuid4())[:8]
+        cursor.execute("""
+            INSERT INTO Users (wallet, ref_code) VALUES (%s, %s)
+            RETURNING id_user
+        """, (f'edge_user_{unique_id}', f'REF_EDGE_{unique_id}'))
+        user = cursor.fetchone()
+        user_id = user["id_user"]
+        
+        # Создаем карту
+        cursor.execute("""
+            INSERT INTO Cards (rarity, start_bounty, name, image_url, image_key)
+            VALUES ('basic', 50, 'Edge Card', 'test.png', %s)
+            ON CONFLICT (image_key) DO NOTHING
+            RETURNING id_card
+        """, (f'TEST_EDGE_CARD_{unique_id}',))
+        card = cursor.fetchone()
+        if not card:
+            cursor.execute("SELECT id_card FROM Cards WHERE image_key = %s", (f'TEST_EDGE_CARD_{unique_id}',))
+            card = cursor.fetchone()
+        card_id = card["id_card"]
+        
+        # Создаем открытие БЕЗ покупки (некорректная ситуация, но возможна)
+        cursor.execute("""
+            INSERT INTO Chest_openings (id_purchase, id_user, id_chest)
+            VALUES (NULL, %s, 1)
+            RETURNING id_opening
+        """, (user_id,))
+        opening = cursor.fetchone()
+        id_opening = opening["id_opening"]
+        
+        # Добавляем карту с id_opening, но без связи с покупкой
+        cursor.execute("""
+            INSERT INTO Card_User (id_user, id_card, quantity, id_opening)
+            VALUES (%s, %s, 1, %s)
+            ON CONFLICT (id_user, id_card) DO UPDATE SET quantity = Card_User.quantity + 1
+        """, (user_id, card_id, id_opening))
+        db_connection.commit()
+        cursor.close()
+        
+        # Проверяем, что тикеты НЕ считаются (нет связи с покупкой)
+        cursor = db_connection.cursor(cursor_factory=RealDictCursor)
+        tickets = get_user_tickets(cursor, user_id)
+        # Карта с id_opening, но без связи с Chest_purchases не должна учитываться
+        # (так как cp.tx_signature будет NULL)
+        assert tickets == 0, f"Expected 0 tickets for card without purchase link, got {tickets}"
+        cursor.close()

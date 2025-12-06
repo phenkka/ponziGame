@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Profile</title>
+    <title>Predict</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Roboto+Flex:opsz,wght@8..144,100;8..144,800;8..144,900&family=Inter:wght@400&display=swap" rel="stylesheet">
@@ -26,7 +26,7 @@
         }
     </script>
 </head>
-<body>
+<body class="page-predict">
     <!-- Header -->
     <header class="header">
         <div class="header-content">
@@ -60,8 +60,8 @@
 
     <!-- Main Content -->
     <main class="main-content">
-        <!-- Profile Page -->
-        <div id="profile-page" class="page" style="display: block;">
+        <!-- Predict Page -->
+        <div id="predict-page" class="page" style="display: block;">
             <!-- Dynamic Menu -->
             <div class="dynamic-menu-container">
                 <div class="dynamic-menu-trigger"></div>
@@ -83,11 +83,11 @@
                             <img src="img/menu/battle.png" alt="Battle" class="menu-icon">
                             <span class="menu-text">battle</span>
                         </a>
-                        <a href="/predict" class="dynamic-menu-item" data-page="predict">
+                        <a href="/predict" class="dynamic-menu-item active" data-page="predict">
                             <img src="img/menu/predict.png" alt="Predict" class="menu-icon">
                             <span class="menu-text">predict</span>
                         </a>
-                        <a href="/profile" class="dynamic-menu-item active" data-page="profile">
+                        <a href="/profile" class="dynamic-menu-item" data-page="profile">
                             <img src="img/menu/profile.png" alt="Profile" class="menu-icon">
                             <span class="menu-text">profile</span>
                         </a>
@@ -108,8 +108,8 @@
                             <div class="jackpot-carousel-item active">
                                 <div class="jackpot-card">
                                     <div class="jackpot-title">EVERYDAY LOTTERY</div>
-                                    <div class="jackpot-amount" id="rtj-amount-ref">Loading...</div>
-                                    <div class="jackpot-timer" id="rtj-timer-ref">Time Left: --:--:--</div>
+                                    <div class="jackpot-amount" id="rtj-amount-predict">Loading...</div>
+                                    <div class="jackpot-timer" id="rtj-timer-predict">Time Left: --:--:--</div>
                                 </div>
                             </div>
 
@@ -121,11 +121,11 @@
                                     </div>
                                     <div class="last-prize-section">
                                         <div class="last-subtitle">Prize pool:</div>
-                                        <div class="last-amount" id="lastj-amount-ref">0 $TOKENS</div>
+                                        <div class="last-amount" id="lastj-amount-predict">0 $TOKENS</div>
                                     </div>
-                                    <div class="last-winner-section" id="lastj-winner-ref" style="display: none;">
+                                    <div class="last-winner-section" id="lastj-winner-predict" style="display: none;">
                                         <div class="winner-wallet" style="color: #6E6BFF; font-size: 24px;">
-                                            Wallet winner: <span id="lastj-winner-wallet-ref">-</span>
+                                            Wallet winner: <span id="lastj-winner-wallet-predict">-</span>
                                         </div>
                                     </div>
                                 </div>
@@ -135,69 +135,39 @@
                             <div class="jackpot-carousel-item">
                                 <div class="super-jackpot-card">
                                     <div class="super-jackpot-title">SUPER JACKPOT</div>
-                                    <div class="super-jackpot-amount" id="superj-amount-ref">0 $TOKENS</div>
+                                    <div class="super-jackpot-amount" id="superj-amount-predict">0 $TOKENS</div>
                                     <div class="super-jackpot-description">Collect all cards to win!</div>
                                 </div>
                             </div>
                         </div>
                     </div>
 
-                    <section class="daily-checkin-section" style="margin-top: 4vh;">
-                        <h2 class="packs-title">DAILY CHECK-IN</h2>
-                        <div class="checkin-container">
-                            <div class="checkin-status" id="checkin-status">
-                                <div class="checkin-info">
-                                    <div class="checkin-days">
-                                        <span class="checkin-label">Consecutive days:</span>
-                                        <span class="checkin-value" id="consecutive-days">0</span>
-                                    </div>
+                    <!-- Predict Section -->
+                    <section class="predict-section" style="margin-top: 4vh;">
+                        <h2 class="packs-title">PREDICT</h2>
+                        
+                        <!-- Active Predictions Block -->
+                        <div class="predict-block" style="margin-bottom: 4vh;">
+                            <h3 class="packs-title" style="font-size: 28px; margin-bottom: 2vh;">ACTIVE PREDICTIONS</h3>
+                            <div class="predict-container" id="predict-content">
+                                <div style="color: white; text-align: center; padding: 20px;">
+                                    Loading predictions...
                                 </div>
-                                <div class="checkin-input-section" id="checkin-input-section">
-                                    <div class="checkin-input-wrapper">
-                                        <label for="checkin-code-input" class="checkin-input-label">Enter today's code from Twitter:</label>
-                                        <input 
-                                            type="text" 
-                                            id="checkin-code-input" 
-                                            class="checkin-code-input" 
-                                            placeholder="Enter 8-character code"
-                                            maxlength="8"
-                                            pattern="[A-Z0-9]{8}"
-                                            autocomplete="off"
-                                            style="text-transform: uppercase;"
-                                        />
-                                    </div>
-                                    <button class="checkin-button" id="checkin-button" disabled>CHECK IN</button>
-                                </div>
-                                <div class="checkin-message" id="checkin-message" style="display: none;"></div>
                             </div>
-                            <div class="checkin-rewards-info">
-                                <p class="checkin-rewards-text">Check in 3 days in a row to get rewards:</p>
-                                <ul class="checkin-rewards-list">
-                                    <li>3 Broken Packs (most common)</li>
-                                    <li>1 Common Pack (common)</li>
-                                    <li>1 Legendary Pack (rare)</li>
-                                    <li>Common or Rare Card (usual)</li>
-                                    <li>Personal Boost (very rare)</li>
-                                </ul>
+                        </div>
+                        
+                        <!-- My Bets Block -->
+                        <div class="predict-block" style="margin-top: 4vh;">
+                            <h3 class="packs-title" style="font-size: 28px; margin-bottom: 2vh;">MY BETS</h3>
+                            <div class="predict-bets-container" id="predict-bets-content">
+                                <div style="color: #9aa0a6; text-align: center; padding: 20px;">
+                                    No bets yet
+                                </div>
                             </div>
                         </div>
                     </section>
 
-                    <section class="referral-section" style="margin-top: 4vh;">
-                        <h2 class="packs-title">REFERRAL</h2>
-                        <div class="referral-row">
-                            <div class="ref-label">My link:</div>
-                            <input id="referral-link" class="ref-input" type="text" readonly value="Loading..." />
-                            <button id="ref-copy" class="ref-copy-btn">COPY</button>
-                        </div>
-                        <div class="referral-stats single">
-                            <div class="ref-stat">
-                                <span class="ref-stat-label">All referrals:</span>
-                                <span id="ref-count" class="ref-stat-value">0</span>
-                            </div>
-                        </div>
-                    </section>
-
+                    <!-- Footer -->
                     <div class="shop-footer" style="margin-top: 12vh;">
                         <div class="footer-title">EVERY PULL DRAINS YOUR HOPE. EVERY TICKET FUELS YOUR LUCK.</div>
                         <div class="footer-links">
@@ -212,7 +182,7 @@
 
     <script src="scripts/main.js"></script>
     <script src="scripts/dynamic-menu.js"></script>
-    
+    <script src="scripts/predict.js"></script>
     <script src="scripts/page-init.js"></script>
 
     <!-- Purchase / Open Modal -->

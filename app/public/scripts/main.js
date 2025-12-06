@@ -140,7 +140,7 @@ function showUserInfo(wallet, refCode, opts = {}) {
   if (addrShort) addrShort.textContent = `${wallet.slice(0, 4)}...${wallet.slice(-4)}`;
   const ref = document.getElementById('ref-code-info');
   if (ref) ref.textContent = refCode;
-  loadBalance(wallet);
+  // loadBalance(wallet); // Закомментировано - скрываем баланс
   loadUserChests(wallet);
   const bal = document.getElementById('balance');
   if (bal) {
@@ -325,6 +325,7 @@ function showPage(pageId) {
   if (pageId === 'rules') { loadJackpot(); loadSuperJackpot(); }
   if (pageId === 'refferal') { loadJackpot(); loadSuperJackpot(); loadReferral(); }
   if (pageId === 'battle') { loadJackpot(); loadSuperJackpot(); }
+  if (pageId === 'predict') { loadJackpot(); loadSuperJackpot(); }
   if (pageId === 'cards' && (currentWallet || hasSession)) { loadJackpot(); loadSuperJackpot(); loadUserChests(currentWallet || localStorage.getItem('wallet')); loadUserCards(currentWallet || localStorage.getItem('wallet')); loadMyPacks(currentWallet || localStorage.getItem('wallet')); }
 }
 
@@ -547,23 +548,23 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // User dropdown functionality
-  const userDropdownButton = document.getElementById('userDropdownButton');
-  const userDropdown = document.querySelector('.user-dropdown');
-  
-  if (userDropdownButton && userDropdown) {
-    userDropdownButton.addEventListener('click', (e) => {
-      e.stopPropagation();
-      userDropdown.classList.toggle('open');
-    });
-  }
-  
-  // Close dropdown when clicking outside
-  document.addEventListener('click', (e) => {
-    if (userDropdown && !userDropdown.contains(e.target)) {
-      userDropdown.classList.remove('open');
-    }
-  });
+  // User dropdown functionality - ЗАКОММЕНТИРОВАНО: скрываем раскрытие кошелька и баланс
+  // const userDropdownButton = document.getElementById('userDropdownButton');
+  // const userDropdown = document.querySelector('.user-dropdown');
+  // 
+  // if (userDropdownButton && userDropdown) {
+  //   userDropdownButton.addEventListener('click', (e) => {
+  //     e.stopPropagation();
+  //     userDropdown.classList.toggle('open');
+  //   });
+  // }
+  // 
+  // // Close dropdown when clicking outside
+  // document.addEventListener('click', (e) => {
+  //   if (userDropdown && !userDropdown.contains(e.target)) {
+  //     userDropdown.classList.remove('open');
+  //   }
+  // });
 
   const logoutBtn = document.getElementById('logoutButton');
   if (logoutBtn) logoutBtn.addEventListener('click', () => {
@@ -704,18 +705,21 @@ async function loadJackpot() {
       const timerElRef = document.getElementById('rtj-timer-ref');
       const timerElCards = document.getElementById('rtj-timer-cards');
       const timerElBattle = document.getElementById('rtj-timer-battle');
+      const timerElPredict = document.getElementById('rtj-timer-predict');
       const amountElHome = document.getElementById('rtj-amount');
       const amountElShop = document.getElementById('rtj-amount-shop');
       const amountElRules = document.getElementById('rtj-amount-rules');
       const amountElRef = document.getElementById('rtj-amount-ref');
       const amountElCards = document.getElementById('rtj-amount-cards');
       const amountElBattle = document.getElementById('rtj-amount-battle');
+      const amountElPredict = document.getElementById('rtj-amount-predict');
       if (amountElHome) amountElHome.textContent = amountText;
       if (amountElShop) amountElShop.textContent = amountText;
       if (amountElRules) amountElRules.textContent = amountText;
       if (amountElRef) amountElRef.textContent = amountText;
       if (amountElCards) amountElCards.textContent = amountText;
       if (amountElBattle) amountElBattle.textContent = amountText;
+      if (amountElPredict) amountElPredict.textContent = amountText;
       
       // Load last jackpot data
       console.log('Loading last jackpot data...');
@@ -782,6 +786,7 @@ async function loadJackpot() {
       const lastAmountElRef = document.getElementById('lastj-amount-ref');
       const lastAmountElCards = document.getElementById('lastj-amount-cards');
       const lastAmountElBattle = document.getElementById('lastj-amount-battle');
+      const lastAmountElPredict = document.getElementById('lastj-amount-predict');
       
       const lastDateElHome = document.getElementById('lastj-date');
       const lastDateElShop = document.getElementById('lastj-date-shop');
@@ -789,6 +794,7 @@ async function loadJackpot() {
       const lastDateElRef = document.getElementById('lastj-date-ref');
       const lastDateElCards = document.getElementById('lastj-date-cards');
       const lastDateElBattle = document.getElementById('lastj-date-battle');
+      const lastDateElPredict = document.getElementById('lastj-date-predict');
       
       if (lastAmountElHome) lastAmountElHome.textContent = lastAmountText;
       if (lastAmountElShop) lastAmountElShop.textContent = lastAmountText;
@@ -796,6 +802,7 @@ async function loadJackpot() {
       if (lastAmountElRef) lastAmountElRef.textContent = lastAmountText;
       if (lastAmountElCards) lastAmountElCards.textContent = lastAmountText;
       if (lastAmountElBattle) lastAmountElBattle.textContent = lastAmountText;
+      if (lastAmountElPredict) lastAmountElPredict.textContent = lastAmountText;
       
       if (lastDateElHome) lastDateElHome.textContent = lastDateText;
       if (lastDateElShop) lastDateElShop.textContent = lastDateText;
@@ -803,6 +810,7 @@ async function loadJackpot() {
       if (lastDateElRef) lastDateElRef.textContent = lastDateText;
       if (lastDateElCards) lastDateElCards.textContent = lastDateText;
       if (lastDateElBattle) lastDateElBattle.textContent = lastDateText;
+      if (lastDateElPredict) lastDateElPredict.textContent = lastDateText;
       
       if (jackpotTimerInterval) clearInterval(jackpotTimerInterval);
       const endsAt = new Date(data.endsAt);
@@ -819,6 +827,7 @@ async function loadJackpot() {
         if (timerElRef) timerElRef.textContent = timerText;
         if (timerElCards) timerElCards.textContent = timerText;
         if (timerElBattle) timerElBattle.textContent = timerText;
+        if (timerElPredict) timerElPredict.textContent = timerText;
         if (diff <= 0) { clearInterval(jackpotTimerInterval); await drawJackpot(); await loadJackpot(); }
       };
       updateTimer();
@@ -843,24 +852,28 @@ async function loadJackpot() {
       const amountElRef2 = document.getElementById('rtj-amount-ref');
       const amountElCards2 = document.getElementById('rtj-amount-cards');
       const amountElBattle2 = document.getElementById('rtj-amount-battle');
+      const amountElPredict2 = document.getElementById('rtj-amount-predict');
       const timerElHome2 = document.getElementById('rtj-timer');
       const timerElShop2 = document.getElementById('rtj-timer-shop');
       const timerElRules2 = document.getElementById('rtj-timer-rules');
       const timerElRef2 = document.getElementById('rtj-timer-ref');
       const timerElCards2 = document.getElementById('rtj-timer-cards');
       const timerElBattle2 = document.getElementById('rtj-timer-battle');
+      const timerElPredict2 = document.getElementById('rtj-timer-predict');
       if (amountElHome2) amountElHome2.textContent = amountErr;
       if (amountElShop2) amountElShop2.textContent = amountErr;
       if (amountElRules2) amountElRules2.textContent = amountErr;
       if (amountElRef2) amountElRef2.textContent = amountErr;
       if (amountElCards2) amountElCards2.textContent = amountErr;
       if (amountElBattle2) amountElBattle2.textContent = amountErr;
+      if (amountElPredict2) amountElPredict2.textContent = amountErr;
       if (timerElHome2) timerElHome2.textContent = timerErr;
       if (timerElShop2) timerElShop2.textContent = timerErr;
       if (timerElRules2) timerElRules2.textContent = timerErr;
       if (timerElRef2) timerElRef2.textContent = timerErr;
       if (timerElCards2) timerElCards2.textContent = timerErr;
       if (timerElBattle2) timerElBattle2.textContent = timerErr;
+      if (timerElPredict2) timerElPredict2.textContent = timerErr;
     }
   } catch (e) {
     const amountElHome3 = document.getElementById('rtj-amount');
@@ -869,24 +882,284 @@ async function loadJackpot() {
     const amountElRef3 = document.getElementById('rtj-amount-ref');
     const amountElCards3 = document.getElementById('rtj-amount-cards');
     const amountElBattle3 = document.getElementById('rtj-amount-battle');
+    const amountElPredict3 = document.getElementById('rtj-amount-predict');
     const timerElHome3 = document.getElementById('rtj-timer');
     const timerElShop3 = document.getElementById('rtj-timer-shop');
     const timerElRules3 = document.getElementById('rtj-timer-rules');
     const timerElRef3 = document.getElementById('rtj-timer-ref');
     const timerElCards3 = document.getElementById('rtj-timer-cards');
     const timerElBattle3 = document.getElementById('rtj-timer-battle');
+    const timerElPredict3 = document.getElementById('rtj-timer-predict');
     if (amountElHome3) amountElHome3.textContent = 'Load error';
     if (amountElShop3) amountElShop3.textContent = 'Load error';
     if (amountElRules3) amountElRules3.textContent = 'Load error';
     if (amountElRef3) amountElRef3.textContent = 'Load error';
     if (amountElCards3) amountElCards3.textContent = 'Load error';
     if (amountElBattle3) amountElBattle3.textContent = 'Load error';
+    if (amountElPredict3) amountElPredict3.textContent = 'Load error';
     if (timerElHome3) timerElHome3.textContent = 'Time Left: --:--:--';
     if (timerElShop3) timerElShop3.textContent = 'Time Left: --:--:--';
     if (timerElRules3) timerElRules3.textContent = 'Time Left: --:--:--';
     if (timerElRef3) timerElRef3.textContent = 'Time Left: --:--:--';
     if (timerElCards3) timerElCards3.textContent = 'Time Left: --:--:--';
     if (timerElBattle3) timerElBattle3.textContent = 'Time Left: --:--:--';
+    if (timerElPredict3) timerElPredict3.textContent = 'Time Left: --:--:--';
+  }
+}
+
+async function loadDailyCheckin() {
+  try {
+    const wallet = currentWallet || sessionStorage.getItem('wallet') || localStorage.getItem('wallet');
+    if (!wallet) return;
+    
+    // Пробуем получить заголовки авторизации, если нет - используем cookie
+    const headers = {};
+    const signature = sessionStorage.getItem('signature') || '';
+    const message = sessionStorage.getItem('message') || '';
+    
+    if (signature && message) {
+      headers['X-Wallet'] = wallet;
+      headers['X-Signature'] = signature;
+      headers['X-Message'] = message;
+    }
+    
+    const r = await fetch(`/api/daily-checkin/status/${wallet}`, {
+      headers: headers,
+      credentials: 'include' // Важно для отправки cookies
+    });
+    const d = await r.json();
+    if (!d || !d.success) return;
+    
+    // Обновляем UI
+    const consecutiveDaysEl = document.getElementById('consecutive-days');
+    const checkinButton = document.getElementById('checkin-button');
+    const checkinMessage = document.getElementById('checkin-message');
+    const checkinInput = document.getElementById('checkin-code-input');
+    const checkinInputSection = document.getElementById('checkin-input-section');
+    
+    if (consecutiveDaysEl) consecutiveDaysEl.textContent = String(d.consecutive_days || 0);
+    
+    if (checkinButton && checkinInput) {
+      if (d.checked_in_today) {
+        // Уже зашел сегодня - скрываем поле ввода, показываем статус
+        if (checkinInputSection) checkinInputSection.style.display = 'none';
+        checkinButton.disabled = true;
+        checkinButton.textContent = 'ALREADY CHECKED IN';
+        checkinButton.style.display = 'block';
+        // Убираем любые inline стили, которые могут влиять на отступы
+        checkinButton.style.marginTop = '';
+        checkinButton.style.marginBottom = '';
+        if (checkinMessage) {
+          checkinMessage.textContent = 'You have already checked in today!';
+          checkinMessage.style.display = 'block';
+          checkinMessage.style.color = '#4CAF50';
+        }
+      } else {
+        // Еще не зашел - показываем поле ввода
+        if (checkinInputSection) {
+          checkinInputSection.style.display = 'flex';
+          // Убеждаемся, что gap сохраняется
+          checkinInputSection.style.gap = '24px';
+        }
+        checkinButton.disabled = true; // Будет активирована при вводе кода
+        checkinButton.textContent = 'CHECK IN';
+        // Убираем любые inline стили, которые могут влиять на отступы
+        checkinButton.style.marginTop = '';
+        checkinButton.style.marginBottom = '';
+        checkinButton.style.display = '';
+        if (checkinInput) {
+          checkinInput.value = '';
+          checkinInput.disabled = false;
+          checkinInput.focus();
+        }
+        if (checkinMessage) {
+          checkinMessage.style.display = 'none';
+        }
+        
+        // Активируем кнопку при вводе кода с валидацией
+        checkinInput.oninput = () => {
+          // Фильтруем: оставляем только буквы A-Z и цифры 0-9
+          let code = checkinInput.value.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+          
+          // Ограничиваем длину до 8 символов
+          if (code.length > 8) {
+            code = code.substring(0, 8);
+          }
+          
+          // Обновляем значение поля (убираем спецсимволы)
+          if (checkinInput.value !== code) {
+            checkinInput.value = code;
+          }
+          
+          // Активируем кнопку только если код ровно 8 символов
+          checkinButton.disabled = code.length !== 8;
+          
+          if (checkinMessage && checkinMessage.style.display !== 'none') {
+            checkinMessage.style.display = 'none';
+          }
+        };
+        
+        // Дополнительная валидация при вставке (paste)
+        checkinInput.onpaste = (e) => {
+          e.preventDefault();
+          const pastedText = (e.clipboardData || window.clipboardData).getData('text');
+          // Фильтруем и ограничиваем длину
+          let code = pastedText.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+          if (code.length > 8) {
+            code = code.substring(0, 8);
+          }
+          checkinInput.value = code;
+          checkinButton.disabled = code.length !== 8;
+          // Триггерим событие input для обновления UI
+          checkinInput.dispatchEvent(new Event('input'));
+        };
+        
+        // Обработка Enter
+        checkinInput.onkeypress = (e) => {
+          if (e.key === 'Enter' && !checkinButton.disabled) {
+            checkinButton.click();
+          }
+        };
+      }
+      
+      // Обработчик клика
+      checkinButton.onclick = async () => {
+        if (checkinButton.disabled) return;
+        
+        const code = checkinInput ? checkinInput.value.trim().toUpperCase() : '';
+        if (!code || code.length !== 8) {
+          if (checkinMessage) {
+            checkinMessage.textContent = 'Please enter a valid 8-character code';
+            checkinMessage.style.display = 'block';
+            checkinMessage.style.color = '#f44336';
+          }
+          return;
+        }
+        
+        checkinButton.disabled = true;
+        checkinButton.textContent = 'Processing...';
+        if (checkinInput) checkinInput.disabled = true;
+        
+        try {
+          const checkinHeaders = {
+            'Content-Type': 'application/json'
+          };
+          const signature = sessionStorage.getItem('signature') || '';
+          const message = sessionStorage.getItem('message') || '';
+          
+          if (signature && message) {
+            checkinHeaders['X-Wallet'] = wallet;
+            checkinHeaders['X-Signature'] = signature;
+            checkinHeaders['X-Message'] = message;
+          }
+          
+          const checkinR = await fetch(`/api/daily-checkin/checkin/${wallet}`, {
+            method: 'POST',
+            headers: checkinHeaders,
+            credentials: 'include',
+            body: JSON.stringify({ daily_code: code })
+          });
+          
+          const checkinData = await checkinR.json();
+          
+          if (checkinData.success) {
+            checkinButton.textContent = 'CHECKED IN!';
+            if (checkinInput) {
+              checkinInput.value = '';
+              checkinInput.disabled = true;
+            }
+            
+            // Обновляем UI сразу на основе ответа от сервера
+            const consecutiveDaysEl = document.getElementById('consecutive-days');
+            if (consecutiveDaysEl) {
+              consecutiveDaysEl.textContent = String(checkinData.consecutive_days || 0);
+            }
+            
+            // Скрываем поле ввода, показываем статус
+            const checkinInputSection = document.getElementById('checkin-input-section');
+            if (checkinInputSection) {
+              checkinInputSection.style.display = 'none';
+            }
+            checkinButton.disabled = true;
+            checkinButton.textContent = 'ALREADY CHECKED IN';
+            // Убираем любые inline стили, которые могут влиять на отступы
+            checkinButton.style.marginTop = '';
+            checkinButton.style.marginBottom = '';
+            
+            if (checkinMessage) {
+              let message = `Checked in! Consecutive days: ${checkinData.consecutive_days}`;
+              if (checkinData.reward_issued && checkinData.rewards && checkinData.rewards.length > 0) {
+                const rewards = checkinData.rewards.map(r => {
+                  if (r.type === 'broken_packs') return `${r.quantity} Broken Packs`;
+                  if (r.type === 'common_pack') return '1 Common Pack';
+                  if (r.type === 'legendary_pack') return '1 Legendary Pack';
+                  if (r.type === 'card') return `1 ${r.rarity} Card`;
+                  if (r.type === 'boost') return 'Personal Boost Activated!';
+                  return 'Reward';
+                }).join(', ');
+                message += `\nRewards: ${rewards}`;
+              }
+              checkinMessage.textContent = message;
+              checkinMessage.style.display = 'block';
+              checkinMessage.style.color = '#4CAF50';
+            }
+            
+            // Обновляем только chests, без перезагрузки всего статуса (чтобы избежать редиректа)
+            if (typeof loadUserChests === 'function') {
+              setTimeout(() => {
+                loadUserChests(wallet);
+              }, 1000);
+            }
+          } else {
+            checkinButton.disabled = false;
+            checkinButton.textContent = 'CHECK IN';
+            // Восстанавливаем правильные стили для секции
+            const checkinInputSection = document.getElementById('checkin-input-section');
+            if (checkinInputSection) {
+              checkinInputSection.style.display = 'flex';
+              checkinInputSection.style.gap = '24px';
+            }
+            // Убираем любые inline стили с кнопки
+            checkinButton.style.marginTop = '';
+            checkinButton.style.marginBottom = '';
+            checkinButton.style.display = '';
+            if (checkinInput) checkinInput.disabled = false;
+            if (checkinMessage) {
+              checkinMessage.textContent = checkinData.error || 'Invalid code. Please check the code from Twitter and try again.';
+              checkinMessage.style.display = 'block';
+              checkinMessage.style.color = '#f44336';
+            }
+            // Фокусируемся на поле ввода для повторной попытки
+            if (checkinInput) {
+              checkinInput.focus();
+              checkinInput.select();
+            }
+          }
+        } catch (error) {
+          console.error('Check-in error:', error);
+          checkinButton.disabled = false;
+          checkinButton.textContent = 'CHECK IN';
+          // Восстанавливаем правильные стили для секции
+          const checkinInputSection = document.getElementById('checkin-input-section');
+          if (checkinInputSection) {
+            checkinInputSection.style.display = 'flex';
+            checkinInputSection.style.gap = '24px';
+          }
+          // Убираем любые inline стили с кнопки
+          checkinButton.style.marginTop = '';
+          checkinButton.style.marginBottom = '';
+          checkinButton.style.display = '';
+          if (checkinInput) checkinInput.disabled = false;
+          if (checkinMessage) {
+            checkinMessage.textContent = 'Error checking in. Please try again.';
+            checkinMessage.style.display = 'block';
+            checkinMessage.style.color = '#f44336';
+          }
+        }
+      };
+    }
+  } catch (error) {
+    console.error('Error loading daily checkin:', error);
   }
 }
 
@@ -929,7 +1202,8 @@ async function loadSuperJackpot() {
         document.getElementById('superj-amount-cards'),      // cards
         document.getElementById('superj-amount-battle'),     // battle
         document.getElementById('superj-amount-ref'),        // referral
-        document.getElementById('superj-amount-rules')       // rules
+        document.getElementById('superj-amount-rules'),      // rules
+        document.getElementById('superj-amount-predict')     // predict
       ];
       
       amountEls.forEach(el => {
@@ -953,7 +1227,8 @@ async function loadSuperJackpot() {
         document.getElementById('superj-amount-cards'),
         document.getElementById('superj-amount-battle'),
         document.getElementById('superj-amount-ref'),
-        document.getElementById('superj-amount-rules')
+        document.getElementById('superj-amount-rules'),
+        document.getElementById('superj-amount-predict')
       ];
       amountEls.forEach(el => {
         if (el) el.textContent = '0 $TOKENS';
@@ -982,6 +1257,67 @@ async function drawJackpot() {
     const data = await r.json();
     if (data && data.success) showMessage(`Raffle finished! Winner: #${data.winnerUserId}, prize: ${data.prize} TOKENS`, 'success');
   } catch (e) { console.error('drawJackpot error', e); }
+}
+
+async function loadBoostNotification() {
+  try {
+    const wallet = currentWallet || sessionStorage.getItem('wallet') || localStorage.getItem('wallet');
+    if (!wallet) return;
+    
+    const headers = {};
+    const signature = sessionStorage.getItem('signature') || '';
+    const message = sessionStorage.getItem('message') || '';
+    
+    if (signature && message) {
+      headers['X-Wallet'] = wallet;
+      headers['X-Signature'] = signature;
+      headers['X-Message'] = message;
+    }
+    
+    const r = await fetch(`/api/daily-checkin/status/${wallet}`, {
+      headers: headers,
+      credentials: 'include'
+    });
+    const d = await r.json();
+    if (!d || !d.success || !d.boost || !d.boost.active) {
+      const boostSection = document.getElementById('boost-notification');
+      if (boostSection) boostSection.style.display = 'none';
+      return;
+    }
+    
+    const boostSection = document.getElementById('boost-notification');
+    const boostValueEl = document.getElementById('boost-value');
+    const boostTimeLeftEl = document.getElementById('boost-time-left');
+    
+    if (boostSection) boostSection.style.display = 'block';
+    if (boostValueEl) boostValueEl.textContent = String(d.boost.boost_value || 10);
+    
+    // Обновляем таймер
+    if (boostTimeLeftEl && d.boost.expires_at) {
+      const updateTimer = () => {
+        const expiresAt = new Date(d.boost.expires_at);
+        const now = new Date();
+        const diff = expiresAt - now;
+        
+        if (diff <= 0) {
+          boostTimeLeftEl.textContent = 'Expired';
+          if (boostSection) boostSection.style.display = 'none';
+          return;
+        }
+        
+        const hours = Math.floor(diff / (1000 * 60 * 60));
+        const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+        const seconds = Math.floor((diff % (1000 * 60)) / 1000);
+        
+        boostTimeLeftEl.textContent = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+      };
+      
+      updateTimer();
+      setInterval(updateTimer, 1000);
+    }
+  } catch (error) {
+    console.error('Error loading boost notification:', error);
+  }
 }
 
 async function loadPacks(forShop = false) {
@@ -1034,6 +1370,7 @@ async function loadPacks(forShop = false) {
         <img src="img/${packImage}" alt="Pack ${chest.id_chest}" class="pack-image">
         <div class="pack-card">
           <div class="pack-name">${getPackLabel(chest.id_chest)}</div>
+          <!-- Закомментирована информация о паках
           <div class="pack-price">PRICE: ${Number(chest.price).toString()} $TOKENS</div>
           <div class="pack-rates">CARD DROP RATES: Common: ${chest.prob_common}%; Rare: ${chest.prob_rare}%; Epic: ${chest.prob_epic}%; Legendary: ${chest.prob_legendary}%${chest.chance_loss > 0 ? `; Loss: ${chest.chance_loss}%` : ''}</div>
           <div class="pack-quantity-selector">
@@ -1044,13 +1381,15 @@ async function loadPacks(forShop = false) {
             </div>
             <div class="quantity-total" data-id="${chest.id_chest}">Total: ${Number(chest.price).toString()} $TOKENS</div>
           </div>
-          <button class="pack-buy-btn" data-id="${chest.id_chest}">${currentWallet ? 'Buy' : 'Connect Phantom wallet'}</button>
+          -->
+          <button class="pack-buy-btn" data-id="${chest.id_chest}">Soon</button>
         </div>
       `;
       container.appendChild(el);
     });
     // Removed price increase info block on shop page per request
-    container.querySelectorAll('.pack-buy-btn').forEach(btn => btn.addEventListener('click', async () => { if (!currentWallet) { await connectWallet(); return; } const id = btn.getAttribute('data-id'); await purchaseChest(id, data.chests); }));
+    // Закомментировано - кнопка теперь показывает "Soon" и не работает
+    // container.querySelectorAll('.pack-buy-btn').forEach(btn => btn.addEventListener('click', async () => { if (!currentWallet) { await connectWallet(); return; } const id = btn.getAttribute('data-id'); await purchaseChest(id, data.chests); }));
     
     // Добавляем обработчики для кнопок количества
     container.querySelectorAll('.quantity-plus').forEach(btn => {
@@ -1100,8 +1439,9 @@ async function loadPacks(forShop = false) {
 }
 
 function updatePackButtons() {
-  const packButtons = document.querySelectorAll('.pack-buy-btn');
-  packButtons.forEach(btn => { btn.textContent = currentWallet ? 'Buy' : 'Connect Phantom wallet'; });
+  // Закомментировано - кнопки теперь всегда показывают "Soon"
+  // const packButtons = document.querySelectorAll('.pack-buy-btn');
+  // packButtons.forEach(btn => { btn.textContent = currentWallet ? 'Buy' : 'Connect Phantom wallet'; });
 }
 
 function updateQuantityTotal(id, price, container) {
@@ -1390,8 +1730,10 @@ async function loadMyPacks(wallet) {
         <img src="img/${packImage}" alt="Pack ${chest.id_chest}" class="pack-image">
         <div class="pack-card">
           <div class="pack-name">${getPackLabel(chest.id_chest)}</div>
+          <!-- Закомментирована информация о паках
           <div class="pack-price">PRICE: ${Number(chest.price).toString()} $TOKENS</div>
           <div class="pack-rates">CARD DROP RATES: Common: ${chest.prob_common}%; Rare: ${chest.prob_rare}%; Epic: ${chest.prob_epic}%; Legendary: ${chest.prob_legendary}%</div>
+          -->
           <button class="pack-buy-btn" data-open-chest="${chest.id_chest}">Open</button>
         </div>`;
       grid.appendChild(el);

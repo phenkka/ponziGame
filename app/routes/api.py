@@ -7,7 +7,7 @@ import os
 import requests
 
 from core.models import AuthRequest
-from core.utils import get_db_connection, generate_ref_code, verify_solana_signature, verify_solana_transaction, HELIUS_RPC_URL, determine_card_rarity, get_random_card_by_rarity, get_or_create_active_round, add_to_jackpot, draw_jackpot, add_to_super_jackpot, claim_super_jackpot, get_or_create_active_super_jackpot_round
+from core.utils import get_db_connection, generate_ref_code, verify_solana_signature, verify_solana_transaction, HELIUS_RPC_URL, determine_card_rarity, get_random_card_by_rarity, get_or_create_active_round, add_to_jackpot, draw_jackpot, add_to_super_jackpot, claim_super_jackpot, get_or_create_active_super_jackpot_round, get_today_daily_code, get_user_checkin_status, process_daily_checkin, get_user_active_boost, issue_prediction_reward
 from core.auth import verify_auth
 from pydantic import BaseModel
 
@@ -1285,14 +1285,6 @@ def setup_api_routes(app):
                     content={"success": False, "error": f"No cards found with rarity: {rarity}"}
                 )
             
-            # Добавляем карту пользователю (или увеличиваем quantity если уже есть)
-            cursor.execute("""
-                INSERT INTO Card_User (id_user, id_card, quantity)
-                VALUES (%s, %s, 1)
-                ON CONFLICT (id_user, id_card) 
-                DO UPDATE SET quantity = Card_User.quantity + 1
-            """, (purchase_data['id_user'], card['id_card']))
-            
             # Отмечаем пак как открытый
             cursor.execute("""
                 UPDATE Chest_purchases
@@ -1300,11 +1292,24 @@ def setup_api_routes(app):
                 WHERE id_purchase = %s
             """, (id_purchase,))
             
-            # Записываем в Chest_openings
+            # Записываем в Chest_openings и получаем id_opening
             cursor.execute("""
                 INSERT INTO Chest_openings (id_purchase, id_user, id_chest)
                 VALUES (%s, %s, %s)
+                RETURNING id_opening
             """, (id_purchase, purchase_data['id_user'], purchase_data['id_chest']))
+            opening_data = cursor.fetchone()
+            id_opening = opening_data['id_opening'] if opening_data else None
+            
+            # Добавляем карту пользователю (или увеличиваем quantity если уже есть)
+            # Связываем карту с открытием пака через id_opening
+            cursor.execute("""
+                INSERT INTO Card_User (id_user, id_card, quantity, id_opening)
+                VALUES (%s, %s, 1, %s)
+                ON CONFLICT (id_user, id_card) 
+                DO UPDATE SET quantity = Card_User.quantity + 1,
+                              id_opening = COALESCE(Card_User.id_opening, EXCLUDED.id_opening)
+            """, (purchase_data['id_user'], card['id_card'], id_opening))
             
             # Проверяем супер джекпот: собрал ли пользователь все карты?
             super_jackpot_result = claim_super_jackpot(cursor, conn, purchase_data['id_user'])
@@ -1341,6 +1346,145 @@ def setup_api_routes(app):
                 status_code=500,
                 content={"success": False, "error": f"Internal error: {str(e)}"}
             )
+    
+    @app.get("/api/daily-checkin/status/{wallet}")
+    async def get_daily_checkin_status(wallet: str, request: Request):
+        """Получить статус ежедневного чекина"""
+        await _ensure_authorized_user(request, wallet)
+        conn = None
+        cursor = None
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            cursor.execute("SELECT id_user FROM Users WHERE wallet = %s", (wallet,))
+            user = cursor.fetchone()
+            if not user:
+                raise HTTPException(status_code=404, detail="User not found")
+            
+            # Получаем код для сегодня
+            today_code = get_today_daily_code(cursor)
+            # Коммитим, если код был сгенерирован
+            conn.commit()
+            
+            # Получаем статус чекина
+            status = get_user_checkin_status(cursor, user['id_user'])
+            
+            # Получаем активный boost
+            boost = get_user_active_boost(cursor, user['id_user'])
+            
+            return {
+                "success": True,
+                "today_code": today_code,
+                "checked_in_today": status["checked_in_today"],
+                "consecutive_days": status["consecutive_days"],
+                "can_claim_reward": status["can_claim_reward"],
+                "boost": boost
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            print(f"Get daily checkin status error: {e}")
+            import traceback
+            traceback.print_exc()
+            return JSONResponse(
+                status_code=500,
+                content={"success": False, "error": "Failed to load checkin status"}
+            )
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                conn.close()
+    
+    @app.post("/api/daily-checkin/checkin/{wallet}")
+    async def daily_checkin(wallet: str, request: Request):
+        """Выполнить ежедневный чекин"""
+        await _ensure_authorized_user(request, wallet)
+        conn = None
+        cursor = None
+        try:
+            body = await request.json()
+            daily_code = body.get("daily_code")
+            
+            if not daily_code:
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "error": "daily_code is required"}
+                )
+            
+            # Базовая валидация на уровне API (дополнительная проверка перед вызовом process_daily_checkin)
+            if not isinstance(daily_code, str):
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "error": "daily_code must be a string"}
+                )
+            
+            # Нормализуем код (убираем пробелы, приводим к верхнему регистру)
+            daily_code_normalized = daily_code.strip().upper()
+            
+            # Проверка длины
+            if len(daily_code_normalized) != 8:
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "error": "Daily code must be exactly 8 characters long"}
+                )
+            
+            # Проверка формата (только A-Z и 0-9, без спецсимволов)
+            import re
+            if not re.match(r'^[A-Z0-9]{8}$', daily_code_normalized):
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "error": "Daily code must contain only uppercase letters (A-Z) and digits (0-9), no special characters allowed"}
+                )
+            
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            cursor.execute("SELECT id_user FROM Users WHERE wallet = %s", (wallet,))
+            user = cursor.fetchone()
+            if not user:
+                raise HTTPException(status_code=404, detail="User not found")
+            
+            # Обрабатываем чекин
+            result = process_daily_checkin(cursor, conn, user['id_user'], daily_code)
+            
+            if not result.get("success"):
+                error_msg = result.get("error", "Check-in failed")
+                # Улучшаем сообщения об ошибках для пользователя
+                if "Invalid daily code" in error_msg:
+                    error_msg = "Invalid code. Please check the code from Twitter and try again."
+                elif "Already checked in" in error_msg:
+                    error_msg = "You have already checked in today!"
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "success": False,
+                        "error": error_msg
+                    }
+                )
+            
+            return {
+                "success": True,
+                "consecutive_days": result["consecutive_days"],
+                "reward_issued": result["reward_issued"],
+                "rewards": result.get("rewards", [])
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            print(f"Daily checkin error: {e}")
+            import traceback
+            traceback.print_exc()
+            return JSONResponse(
+                status_code=500,
+                content={"success": False, "error": f"Internal error: {str(e)}"}
+            )
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                conn.close()
     
     @app.get("/api/referral/summary/{wallet}")
     async def get_referral_summary(wallet: str, request: Request):
@@ -1381,6 +1525,1220 @@ def setup_api_routes(app):
                 cursor.close()
             if conn:
                 conn.close()
+    
+    @app.post("/api/battle/start")
+    async def start_battle(request: Request):
+        """Начать поиск противника для батла"""
+        try:
+            # Проверяем авторизацию
+            x_wallet = request.headers.get("X-Wallet")
+            x_signature = request.headers.get("X-Signature")
+            x_message = request.headers.get("X-Message")
+            
+            if not x_wallet or not x_signature or not x_message:
+                auth_token = request.cookies.get("auth_token")
+                if auth_token:
+                    try:
+                        from core.sessions import verify_session_cookie
+                        auth_data = await verify_session_cookie(request)
+                        x_wallet = auth_data["wallet"]
+                    except Exception as e:
+                        return JSONResponse(
+                            status_code=401,
+                            content={"success": False, "error": "Invalid session"}
+                        )
+                else:
+                    return JSONResponse(
+                        status_code=401,
+                        content={"success": False, "error": "Authentication required"}
+                    )
+            else:
+                try:
+                    auth_data = await verify_auth(x_wallet=x_wallet, x_signature=x_signature, x_message=x_message)
+                except HTTPException as e:
+                    return JSONResponse(
+                        status_code=e.status_code,
+                        content={"success": False, "error": e.detail}
+                    )
+            
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            # Получаем id_user
+            cursor.execute("SELECT id_user FROM Users WHERE wallet = %s", (x_wallet,))
+            user = cursor.fetchone()
+            if not user:
+                cursor.close()
+                conn.close()
+                return JSONResponse(
+                    status_code=404,
+                    content={"success": False, "error": "User not found"}
+                )
+            
+            user_id = user['id_user']
+            
+            # Проверяем, есть ли у пользователя карты
+            cursor.execute("""
+                SELECT COUNT(*) as card_count
+                FROM Card_User
+                WHERE id_user = %s AND quantity > 0
+            """, (user_id,))
+            card_count = cursor.fetchone()
+            
+            if not card_count or card_count['card_count'] == 0:
+                cursor.close()
+                conn.close()
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "success": False,
+                        "error": "You don't have any cards. You need at least one card to participate in battles."
+                    }
+                )
+            
+            # Проверяем, есть ли активный батл (исключаем отмененные и завершенные)
+            cursor.execute("""
+                SELECT id_battle, status FROM Battles 
+                WHERE id_user = %s
+                AND status IN ('searching', 'card_selection', 'fighting')
+                ORDER BY started_at DESC
+                LIMIT 1
+            """, (user_id,))
+            active_battle = cursor.fetchone()
+            
+            if active_battle:
+                cursor.close()
+                conn.close()
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "success": False,
+                        "error": "You already have an active battle",
+                        "battle_id": active_battle['id_battle'],
+                        "status": active_battle['status']
+                    }
+                )
+            
+            # Создаем новый батл
+            cursor.execute("""
+                INSERT INTO Battles (id_user, status)
+                VALUES (%s, 'searching')
+                RETURNING id_battle, started_at
+            """, (user_id,))
+            battle = cursor.fetchone()
+            
+            conn.commit()
+            cursor.close()
+            conn.close()
+            
+            # Генерируем случайное время поиска (30-60 секунд)
+            import random
+            search_duration = random.randint(30, 60)
+            
+            return {
+                "success": True,
+                "battle_id": battle['id_battle'],
+                "status": "searching",
+                "search_duration": search_duration,
+                "started_at": str(battle['started_at'])
+            }
+            
+        except Exception as e:
+            print(f"Start battle error: {e}")
+            import traceback
+            traceback.print_exc()
+            return JSONResponse(
+                status_code=500,
+                content={"success": False, "error": f"Internal error: {str(e)}"}
+            )
+    
+    @app.post("/api/battle/cancel")
+    async def cancel_battle(request: Request):
+        """Отменить активный батл"""
+        try:
+            body = await request.json()
+            wallet = body.get("wallet")
+            battle_id = body.get("battle_id")
+            
+            if not wallet or not battle_id:
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "error": "Missing required fields: wallet, battle_id"}
+                )
+            
+            # Проверяем авторизацию
+            x_wallet = request.headers.get("X-Wallet")
+            x_signature = request.headers.get("X-Signature")
+            x_message = request.headers.get("X-Message")
+            
+            if not x_wallet or not x_signature or not x_message:
+                auth_token = request.cookies.get("auth_token")
+                if auth_token:
+                    try:
+                        from core.sessions import verify_session_cookie
+                        auth_data = await verify_session_cookie(request)
+                        if auth_data["wallet"] != wallet:
+                            return JSONResponse(status_code=403, content={"success": False, "error": "Access denied"})
+                    except Exception as e:
+                        return JSONResponse(status_code=401, content={"success": False, "error": "Invalid session"})
+                else:
+                    return JSONResponse(status_code=401, content={"success": False, "error": "Authentication required"})
+            else:
+                try:
+                    auth_data = await verify_auth(x_wallet=x_wallet, x_signature=x_signature, x_message=x_message)
+                    if auth_data["wallet"] != wallet:
+                        return JSONResponse(status_code=403, content={"success": False, "error": "Access denied"})
+                except HTTPException as e:
+                    return JSONResponse(status_code=e.status_code, content={"success": False, "error": e.detail})
+            
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            # Проверяем батл
+            cursor.execute("""
+                SELECT b.*, u.id_user
+                FROM Battles b
+                JOIN Users u ON b.id_user = u.id_user
+                WHERE b.id_battle = %s AND u.wallet = %s
+            """, (battle_id, wallet))
+            battle = cursor.fetchone()
+            
+            if not battle:
+                cursor.close()
+                conn.close()
+                return JSONResponse(
+                    status_code=404,
+                    content={"success": False, "error": "Battle not found"}
+                )
+            
+            # Можно отменить только если батл еще не завершен
+            if battle['status'] == 'completed':
+                cursor.close()
+                conn.close()
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "error": "Cannot cancel completed battle"}
+                )
+            
+            # Отменяем батл
+            cursor.execute("""
+                UPDATE Battles
+                SET status = 'cancelled'
+                WHERE id_battle = %s
+            """, (battle_id,))
+            
+            conn.commit()
+            cursor.close()
+            conn.close()
+            
+            return {
+                "success": True,
+                "battle_id": battle_id,
+                "status": "cancelled"
+            }
+            
+        except Exception as e:
+            print(f"Cancel battle error: {e}")
+            import traceback
+            traceback.print_exc()
+            return JSONResponse(
+                status_code=500,
+                content={"success": False, "error": f"Internal error: {str(e)}"}
+            )
+    
+    @app.post("/api/battle/finish-search")
+    async def finish_battle_search(request: Request):
+        """Завершить поиск противника и перейти к выбору карт"""
+        try:
+            body = await request.json()
+            wallet = body.get("wallet")
+            battle_id = body.get("battle_id")
+            
+            if not wallet or not battle_id:
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "error": "Missing required fields: wallet, battle_id"}
+                )
+            
+            # Проверяем авторизацию
+            x_wallet = request.headers.get("X-Wallet")
+            x_signature = request.headers.get("X-Signature")
+            x_message = request.headers.get("X-Message")
+            
+            if not x_wallet or not x_signature or not x_message:
+                auth_token = request.cookies.get("auth_token")
+                if auth_token:
+                    try:
+                        from core.sessions import verify_session_cookie
+                        auth_data = await verify_session_cookie(request)
+                        if auth_data["wallet"] != wallet:
+                            return JSONResponse(status_code=403, content={"success": False, "error": "Access denied"})
+                    except Exception as e:
+                        return JSONResponse(status_code=401, content={"success": False, "error": "Invalid session"})
+                else:
+                    return JSONResponse(status_code=401, content={"success": False, "error": "Authentication required"})
+            else:
+                try:
+                    auth_data = await verify_auth(x_wallet=x_wallet, x_signature=x_signature, x_message=x_message)
+                    if auth_data["wallet"] != wallet:
+                        return JSONResponse(status_code=403, content={"success": False, "error": "Access denied"})
+                except HTTPException as e:
+                    return JSONResponse(status_code=e.status_code, content={"success": False, "error": e.detail})
+            
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            # Проверяем батл
+            cursor.execute("""
+                SELECT b.*, u.id_user
+                FROM Battles b
+                JOIN Users u ON b.id_user = u.id_user
+                WHERE b.id_battle = %s AND u.wallet = %s
+            """, (battle_id, wallet))
+            battle = cursor.fetchone()
+            
+            if not battle:
+                cursor.close()
+                conn.close()
+                return JSONResponse(
+                    status_code=404,
+                    content={"success": False, "error": "Battle not found"}
+                )
+            
+            if battle['status'] != 'searching':
+                cursor.close()
+                conn.close()
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "error": f"Battle is in {battle['status']} status, not searching"}
+                )
+            
+            # Переводим в статус выбора карт
+            cursor.execute("""
+                UPDATE Battles
+                SET status = 'card_selection'
+                WHERE id_battle = %s
+            """, (battle_id,))
+            
+            conn.commit()
+            cursor.close()
+            conn.close()
+            
+            return {
+                "success": True,
+                "battle_id": battle_id,
+                "status": "card_selection"
+            }
+            
+        except Exception as e:
+            print(f"Finish battle search error: {e}")
+            import traceback
+            traceback.print_exc()
+            return JSONResponse(
+                status_code=500,
+                content={"success": False, "error": f"Internal error: {str(e)}"}
+            )
+    
+    @app.post("/api/battle/select-cards")
+    async def select_battle_cards(request: Request):
+        """Выбрать карты для батла"""
+        try:
+            body = await request.json()
+            wallet = body.get("wallet")
+            battle_id = body.get("battle_id")
+            cards = body.get("cards", [])  # [{id_card, quantity}, ...]
+            
+            if not wallet or not battle_id or not cards:
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "error": "Missing required fields: wallet, battle_id, cards"}
+                )
+            
+            if len(cards) == 0 or len(cards) > 5:
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "error": "You must select 1-5 cards"}
+                )
+            
+            # Проверяем авторизацию
+            x_wallet = request.headers.get("X-Wallet")
+            x_signature = request.headers.get("X-Signature")
+            x_message = request.headers.get("X-Message")
+            
+            if not x_wallet or not x_signature or not x_message:
+                auth_token = request.cookies.get("auth_token")
+                if auth_token:
+                    try:
+                        from core.sessions import verify_session_cookie
+                        auth_data = await verify_session_cookie(request)
+                        if auth_data["wallet"] != wallet:
+                            return JSONResponse(status_code=403, content={"success": False, "error": "Access denied"})
+                    except Exception as e:
+                        return JSONResponse(status_code=401, content={"success": False, "error": "Invalid session"})
+                else:
+                    return JSONResponse(status_code=401, content={"success": False, "error": "Authentication required"})
+            else:
+                try:
+                    auth_data = await verify_auth(x_wallet=x_wallet, x_signature=x_signature, x_message=x_message)
+                    if auth_data["wallet"] != wallet:
+                        return JSONResponse(status_code=403, content={"success": False, "error": "Access denied"})
+                except HTTPException as e:
+                    return JSONResponse(status_code=e.status_code, content={"success": False, "error": e.detail})
+            
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            # Проверяем батл
+            cursor.execute("""
+                SELECT b.*, u.id_user
+                FROM Battles b
+                JOIN Users u ON b.id_user = u.id_user
+                WHERE b.id_battle = %s AND u.wallet = %s
+            """, (battle_id, wallet))
+            battle = cursor.fetchone()
+            
+            if not battle:
+                cursor.close()
+                conn.close()
+                return JSONResponse(
+                    status_code=404,
+                    content={"success": False, "error": "Battle not found"}
+                )
+            
+            if battle['status'] != 'card_selection':
+                cursor.close()
+                conn.close()
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "error": f"Battle is in {battle['status']} status, cannot select cards"}
+                )
+            
+            # Проверяем, что у пользователя есть все выбранные карты
+            user_id = battle['id_user']
+            total_tickets = 0
+            
+            for card_data in cards:
+                id_card = card_data.get('id_card')
+                quantity = card_data.get('quantity', 1)
+                
+                if not id_card or quantity <= 0:
+                    cursor.close()
+                    conn.close()
+                    return JSONResponse(
+                        status_code=400,
+                        content={"success": False, "error": "Invalid card data"}
+                    )
+                
+                # Проверяем наличие карты
+                cursor.execute("""
+                    SELECT cu.quantity as user_quantity, c.start_bounty
+                    FROM Card_User cu
+                    JOIN Cards c ON cu.id_card = c.id_card
+                    WHERE cu.id_user = %s AND cu.id_card = %s
+                """, (user_id, id_card))
+                card_info = cursor.fetchone()
+                
+                if not card_info or card_info['user_quantity'] < quantity:
+                    cursor.close()
+                    conn.close()
+                    return JSONResponse(
+                        status_code=400,
+                        content={"success": False, "error": f"Not enough cards. Card {id_card}: have {card_info['user_quantity'] if card_info else 0}, need {quantity}"}
+                    )
+                
+                total_tickets += card_info['start_bounty'] * quantity
+            
+            # Сохраняем выбранные карты
+            import json
+            cursor.execute("""
+                UPDATE Battles
+                SET user_cards = %s, user_tickets = %s, status = 'fighting'
+                WHERE id_battle = %s
+            """, (json.dumps(cards), total_tickets, battle_id))
+            
+            # Генерируем карты для противника (1-5 карт, сумма билетов 100-400)
+            import random
+            opponent_tickets_target = random.randint(100, 400)
+            opponent_tickets = 0
+            
+            # Получаем случайные карты из БД с полной информацией
+            cursor.execute("""
+                SELECT id_card, start_bounty, rarity, name, image_url, image_key
+                FROM Cards
+                WHERE image_url IS NOT NULL AND image_url != ''
+                ORDER BY RANDOM()
+                LIMIT 50
+            """)
+            available_cards = cursor.fetchall()
+            
+            # Выбираем карты для противника, чтобы сумма была близка к цели
+            selected_opponent_cards = {}
+            attempts = 0
+            num_opponent_cards = random.randint(1, 5)  # Случайное количество карт
+            
+            while opponent_tickets < opponent_tickets_target and attempts < 100 and len(selected_opponent_cards) < num_opponent_cards:
+                card = random.choice(available_cards)
+                card_id = card['id_card']
+                card_tickets = card['start_bounty']
+                
+                if opponent_tickets + card_tickets <= opponent_tickets_target + 100:  # Допуск
+                    if card_id not in selected_opponent_cards:
+                        selected_opponent_cards[card_id] = {
+                            'id_card': card_id,
+                            'quantity': 1,
+                            'start_bounty': card_tickets,
+                            'name': card.get('name'),
+                            'image_url': card.get('image_url'),
+                            'rarity': card.get('rarity')
+                        }
+                        opponent_tickets += card_tickets
+                attempts += 1
+            
+            # Если не набрали достаточно, добавляем еще карты до минимума 100
+            if opponent_tickets < 100:
+                for card in available_cards:
+                    if card['id_card'] not in selected_opponent_cards and len(selected_opponent_cards) < 5:
+                        selected_opponent_cards[card['id_card']] = {
+                            'id_card': card['id_card'],
+                            'quantity': 1,
+                            'start_bounty': card['start_bounty'],
+                            'name': card.get('name'),
+                            'image_url': card.get('image_url'),
+                            'rarity': card.get('rarity')
+                        }
+                        opponent_tickets += card['start_bounty']
+                        if opponent_tickets >= 100:
+                            break
+                
+                # Если все еще меньше 100, добавляем карты без ограничения по количеству
+                if opponent_tickets < 100:
+                    for card in available_cards:
+                        if card['id_card'] not in selected_opponent_cards:
+                            selected_opponent_cards[card['id_card']] = {
+                                'id_card': card['id_card'],
+                                'quantity': 1,
+                                'start_bounty': card['start_bounty'],
+                                'name': card.get('name'),
+                                'image_url': card.get('image_url'),
+                                'rarity': card.get('rarity')
+                            }
+                            opponent_tickets += card['start_bounty']
+                            if opponent_tickets >= 100:
+                                break
+                
+                # Если все еще меньше 100 (мало карт в БД), устанавливаем минимум 100
+                if opponent_tickets < 100:
+                    opponent_tickets = 100
+            
+            opponent_cards_list = list(selected_opponent_cards.values())
+            
+            # Обновляем батл с картами противника (внутреннее название bot_cards остается для БД)
+            cursor.execute("""
+                UPDATE Battles
+                SET bot_cards = %s, bot_tickets = %s
+                WHERE id_battle = %s
+            """, (json.dumps(opponent_cards_list), opponent_tickets, battle_id))
+            
+            conn.commit()
+            cursor.close()
+            conn.close()
+            
+            return {
+                "success": True,
+                "battle_id": battle_id,
+                "user_cards": cards,
+                "user_tickets": total_tickets,
+                "opponent_tickets": opponent_tickets,
+                "status": "fighting"
+            }
+            
+        except Exception as e:
+            print(f"Select battle cards error: {e}")
+            import traceback
+            traceback.print_exc()
+            return JSONResponse(
+                status_code=500,
+                content={"success": False, "error": f"Internal error: {str(e)}"}
+            )
+    
+    @app.post("/api/battle/fight")
+    async def fight_battle(request: Request):
+        """Провести бой и определить победителя"""
+        try:
+            body = await request.json()
+            wallet = body.get("wallet")
+            battle_id = body.get("battle_id")
+            
+            if not wallet or not battle_id:
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "error": "Missing required fields: wallet, battle_id"}
+                )
+            
+            # Проверяем авторизацию
+            x_wallet = request.headers.get("X-Wallet")
+            x_signature = request.headers.get("X-Signature")
+            x_message = request.headers.get("X-Message")
+            
+            if not x_wallet or not x_signature or not x_message:
+                auth_token = request.cookies.get("auth_token")
+                if auth_token:
+                    try:
+                        from core.sessions import verify_session_cookie
+                        auth_data = await verify_session_cookie(request)
+                        if auth_data["wallet"] != wallet:
+                            return JSONResponse(status_code=403, content={"success": False, "error": "Access denied"})
+                    except Exception as e:
+                        return JSONResponse(status_code=401, content={"success": False, "error": "Invalid session"})
+                else:
+                    return JSONResponse(status_code=401, content={"success": False, "error": "Authentication required"})
+            else:
+                try:
+                    auth_data = await verify_auth(x_wallet=x_wallet, x_signature=x_signature, x_message=x_message)
+                    if auth_data["wallet"] != wallet:
+                        return JSONResponse(status_code=403, content={"success": False, "error": "Access denied"})
+                except HTTPException as e:
+                    return JSONResponse(status_code=e.status_code, content={"success": False, "error": e.detail})
+            
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            # Получаем батл
+            cursor.execute("""
+                SELECT b.*, u.id_user
+                FROM Battles b
+                JOIN Users u ON b.id_user = u.id_user
+                WHERE b.id_battle = %s AND u.wallet = %s
+            """, (battle_id, wallet))
+            battle = cursor.fetchone()
+            
+            if not battle:
+                cursor.close()
+                conn.close()
+                return JSONResponse(
+                    status_code=404,
+                    content={"success": False, "error": "Battle not found"}
+                )
+            
+            if battle['status'] != 'fighting':
+                cursor.close()
+                conn.close()
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "error": f"Battle is in {battle['status']} status, cannot fight"}
+                )
+            
+            user_id = battle['id_user']
+            user_tickets = battle['user_tickets']
+            opponent_tickets = battle['bot_tickets']  # Внутреннее название, в ответе будет opponent_tickets
+            
+            # Определяем победителя
+            # Билеты не влияют на победу - это только для отображения
+            import random
+            import json
+            from datetime import datetime
+            
+            # Случайное определение победителя
+            # Противник выигрывает в 70% случаев
+            random_value = random.random()
+            opponent_wins = random_value < 0.70
+            winner = 'bot' if opponent_wins else 'user'  # В БД остается bot для внутренней логики
+            
+            # Обновляем статус батла
+            cursor.execute("""
+                UPDATE Battles
+                SET status = 'completed', winner = %s, completed_at = %s
+                WHERE id_battle = %s
+            """, (winner, datetime.now(), battle_id))
+            
+            # Передаем карты
+            user_cards = json.loads(battle['user_cards']) if isinstance(battle['user_cards'], str) else battle['user_cards']
+            opponent_cards = json.loads(battle['bot_cards']) if isinstance(battle['bot_cards'], str) else battle['bot_cards']
+            
+            # Получаем полную информацию о картах пользователя
+            user_cards_full = []
+            for card_data in user_cards:
+                cursor.execute("""
+                    SELECT id_card, name, image_url, start_bounty, rarity
+                    FROM Cards
+                    WHERE id_card = %s
+                """, (card_data['id_card'],))
+                card_info = cursor.fetchone()
+                if card_info:
+                    user_cards_full.append({
+                        'id_card': card_info['id_card'],
+                        'name': card_info.get('name'),
+                        'image_url': card_info.get('image_url'),
+                        'start_bounty': card_info['start_bounty'],
+                        'rarity': card_info.get('rarity'),
+                        'quantity': card_data.get('quantity', 1)
+                    })
+            
+            # Получаем полную информацию о картах противника
+            opponent_cards_full = []
+            for card_data in opponent_cards:
+                cursor.execute("""
+                    SELECT id_card, name, image_url, start_bounty, rarity
+                    FROM Cards
+                    WHERE id_card = %s
+                """, (card_data['id_card'],))
+                card_info = cursor.fetchone()
+                if card_info:
+                    opponent_cards_full.append({
+                        'id_card': card_info['id_card'],
+                        'name': card_info.get('name'),
+                        'image_url': card_info.get('image_url'),
+                        'start_bounty': card_info['start_bounty'],
+                        'rarity': card_info.get('rarity'),
+                        'quantity': card_data.get('quantity', 1)
+                    })
+            
+            if opponent_wins:
+                # Противник выиграл - пользователь теряет свои карты
+                for card_data in user_cards:
+                    id_card = card_data['id_card']
+                    quantity = card_data['quantity']
+                    cursor.execute("""
+                        UPDATE Card_User
+                        SET quantity = quantity - %s
+                        WHERE id_user = %s AND id_card = %s
+                    """, (quantity, user_id, id_card))
+                    cursor.execute("""
+                        DELETE FROM Card_User
+                        WHERE id_user = %s AND id_card = %s AND quantity <= 0
+                    """, (user_id, id_card))
+            else:
+                # Пользователь выиграл - получает карты противника
+                for card_data in opponent_cards:
+                    id_card = card_data['id_card']
+                    quantity = card_data.get('quantity', 1)
+                    cursor.execute("""
+                        INSERT INTO Card_User (id_user, id_card, quantity)
+                        VALUES (%s, %s, %s)
+                        ON CONFLICT (id_user, id_card) DO UPDATE SET quantity = Card_User.quantity + %s
+                    """, (user_id, id_card, quantity, quantity))
+            
+            conn.commit()
+            cursor.close()
+            conn.close()
+            
+            # Преобразуем winner для ответа (bot -> opponent)
+            winner_response = 'opponent' if winner == 'bot' else winner
+            
+            return {
+                "success": True,
+                "battle_id": battle_id,
+                "winner": winner_response,
+                "user_tickets": user_tickets,
+                "opponent_tickets": opponent_tickets,
+                "user_cards": user_cards_full,
+                "opponent_cards": opponent_cards_full,
+                "cards_won": opponent_cards_full if not opponent_wins else [],
+                "cards_lost": user_cards_full if opponent_wins else []
+            }
+            
+        except Exception as e:
+            print(f"Fight battle error: {e}")
+            import traceback
+            traceback.print_exc()
+            return JSONResponse(
+                status_code=500,
+                content={"success": False, "error": f"Internal error: {str(e)}"}
+            )
+    
+    @app.get("/api/battle/status/{battle_id}")
+    async def get_battle_status(battle_id: int, request: Request):
+        """Получить статус батла"""
+        try:
+            # Проверяем авторизацию
+            x_wallet = request.headers.get("X-Wallet")
+            x_signature = request.headers.get("X-Signature")
+            x_message = request.headers.get("X-Message")
+            
+            wallet = None
+            if not x_wallet or not x_signature or not x_message:
+                auth_token = request.cookies.get("auth_token")
+                if auth_token:
+                    try:
+                        from core.sessions import verify_session_cookie
+                        auth_data = await verify_session_cookie(request)
+                        wallet = auth_data["wallet"]
+                    except Exception:
+                        pass
+            else:
+                try:
+                    auth_data = await verify_auth(x_wallet=x_wallet, x_signature=x_signature, x_message=x_message)
+                    wallet = auth_data["wallet"]
+                except HTTPException:
+                    pass
+            
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            cursor.execute("""
+                SELECT b.*, u.wallet
+                FROM Battles b
+                JOIN Users u ON b.id_user = u.id_user
+                WHERE b.id_battle = %s
+            """, (battle_id,))
+            battle = cursor.fetchone()
+            
+            if not battle:
+                cursor.close()
+                conn.close()
+                return JSONResponse(
+                    status_code=404,
+                    content={"success": False, "error": "Battle not found"}
+                )
+            
+            # Проверяем, что пользователь имеет доступ к этому батлу
+            if wallet and battle['wallet'] != wallet:
+                cursor.close()
+                conn.close()
+                return JSONResponse(
+                    status_code=403,
+                    content={"success": False, "error": "Access denied"}
+                )
+            
+            import json
+            user_cards = json.loads(battle['user_cards']) if isinstance(battle['user_cards'], str) else battle['user_cards']
+            opponent_cards = json.loads(battle['bot_cards']) if isinstance(battle['bot_cards'], str) else battle['bot_cards']
+            
+            cursor.close()
+            conn.close()
+            
+            # Преобразуем winner для ответа (bot -> opponent)
+            winner_response = 'opponent' if battle.get('winner') == 'bot' else battle.get('winner')
+            
+            return {
+                "success": True,
+                "battle_id": battle_id,
+                "status": battle['status'],
+                "user_tickets": battle['user_tickets'],
+                "opponent_tickets": battle['bot_tickets'],
+                "winner": winner_response,
+                "user_cards": user_cards,
+                "opponent_cards": opponent_cards if battle['status'] == 'completed' else [],
+                "started_at": str(battle['started_at']),
+                "completed_at": str(battle['completed_at']) if battle['completed_at'] else None
+            }
+            
+        except Exception as e:
+            print(f"Get battle status error: {e}")
+            return JSONResponse(
+                status_code=500,
+                content={"success": False, "error": f"Internal error: {str(e)}"}
+            )
+    
+    # ==================== PREDICTIONS API ====================
+    
+    @app.get("/api/predictions/markets")
+    async def get_predictions_markets(
+        period: str = "24h",
+        limit: int = 20,
+        force_refresh: bool = False
+    ):
+        """Получить список активных пари"""
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            # Если force_refresh, можно запустить синхронизацию (но это долго, лучше не делать)
+            # Просто получаем из БД
+            
+            # Определяем сортировку по периоду
+            order_by = "volume_24h DESC"
+            if period == "7d":
+                order_by = "volume_7d DESC"
+            elif period == "30d":
+                order_by = "volume_30d DESC"
+            
+            cursor.execute(f"""
+                SELECT 
+                    id_prediction,
+                    polymarket_id,
+                    title,
+                    description,
+                    category,
+                    outcome_a,
+                    outcome_b,
+                    outcome_a_probability,
+                    outcome_b_probability,
+                    resolution_date,
+                    status,
+                    volume_24h,
+                    volume_7d,
+                    volume_30d,
+                    created_at,
+                    updated_at
+                FROM public.predictions
+                WHERE status = 'active'
+                ORDER BY {order_by}
+                LIMIT %s
+            """, (limit,))
+            
+            markets = cursor.fetchall()
+            cursor.close()
+            conn.close()
+            
+            # Преобразуем в список словарей
+            markets_list = []
+            for market in markets:
+                markets_list.append({
+                    "id_prediction": market['id_prediction'],
+                    "polymarket_id": market['polymarket_id'],
+                    "title": market['title'],
+                    "description": market.get('description', ''),
+                    "category": market.get('category', 'general'),
+                    "outcome_a": market['outcome_a'],
+                    "outcome_b": market['outcome_b'],
+                    "outcome_a_probability": float(market['outcome_a_probability']) if market['outcome_a_probability'] else 50.0,
+                    "outcome_b_probability": float(market['outcome_b_probability']) if market['outcome_b_probability'] else 50.0,
+                    "resolution_date": str(market['resolution_date']) if market['resolution_date'] else None,
+                    "status": market['status'],
+                    "volume_24h": float(market['volume_24h']) if market['volume_24h'] else 0.0,
+                    "volume_7d": float(market['volume_7d']) if market['volume_7d'] else 0.0,
+                    "volume_30d": float(market['volume_30d']) if market['volume_30d'] else 0.0
+                })
+            
+            return {
+                "success": True,
+                "markets": markets_list,
+                "count": len(markets_list)
+            }
+            
+        except Exception as e:
+            print(f"Get predictions markets error: {e}")
+            import traceback
+            traceback.print_exc()
+            return JSONResponse(
+                status_code=500,
+                content={"success": False, "error": f"Internal error: {str(e)}"}
+            )
+    
+    @app.post("/api/predictions/bet/{wallet}")
+    async def create_prediction_bet(wallet: str, request: Request):
+        """Создать ставку на пари"""
+        try:
+            # Проверяем авторизацию
+            await _ensure_authorized_user(request, wallet)
+            
+            # Получаем данные из тела запроса
+            body = await request.json()
+            prediction_id = body.get("prediction_id")
+            chosen_outcome = body.get("chosen_outcome")
+            
+            if not prediction_id or not chosen_outcome:
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "error": "Missing prediction_id or chosen_outcome"}
+                )
+            
+            if chosen_outcome not in ['A', 'B']:
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "error": "chosen_outcome must be 'A' or 'B'"}
+                )
+            
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            # Получаем пользователя
+            cursor.execute("SELECT id_user FROM Users WHERE wallet = %s", (wallet,))
+            user = cursor.fetchone()
+            if not user:
+                cursor.close()
+                conn.close()
+                return JSONResponse(
+                    status_code=404,
+                    content={"success": False, "error": "User not found"}
+                )
+            user_id = user['id_user']
+            
+            # Проверяем, что пари существует и активно
+            cursor.execute("""
+                SELECT id_prediction, status FROM public.predictions 
+                WHERE id_prediction = %s
+            """, (prediction_id,))
+            prediction = cursor.fetchone()
+            
+            if not prediction:
+                cursor.close()
+                conn.close()
+                return JSONResponse(
+                    status_code=404,
+                    content={"success": False, "error": "Prediction not found"}
+                )
+            
+            if prediction['status'] != 'active':
+                cursor.close()
+                conn.close()
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "error": "Prediction is not active"}
+                )
+            
+            # Проверяем, нет ли уже ставки от этого пользователя
+            cursor.execute("""
+                SELECT id_bet FROM public.user_bets 
+                WHERE id_user = %s AND id_prediction = %s
+            """, (user_id, prediction_id))
+            existing_bet = cursor.fetchone()
+            
+            if existing_bet:
+                cursor.close()
+                conn.close()
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "error": "Bet already exists for this prediction"}
+                )
+            
+            # Создаем ставку
+            cursor.execute("""
+                INSERT INTO public.user_bets (id_user, id_prediction, chosen_outcome, status)
+                VALUES (%s, %s, %s, %s)
+                RETURNING id_bet
+            """, (user_id, prediction_id, chosen_outcome, 'pending'))
+            
+            bet = cursor.fetchone()
+            bet_id = bet['id_bet']
+            
+            conn.commit()
+            cursor.close()
+            conn.close()
+            
+            return {
+                "success": True,
+                "bet_id": bet_id,
+                "message": "Bet placed successfully"
+            }
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            print(f"Create prediction bet error: {e}")
+            import traceback
+            traceback.print_exc()
+            return JSONResponse(
+                status_code=500,
+                content={"success": False, "error": f"Internal error: {str(e)}"}
+            )
+    
+    @app.get("/api/predictions/user/{wallet}")
+    async def get_user_predictions_bets(wallet: str, request: Request):
+        """Получить ставки пользователя"""
+        try:
+            # Проверяем авторизацию
+            await _ensure_authorized_user(request, wallet)
+            
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            # Получаем пользователя
+            cursor.execute("SELECT id_user FROM Users WHERE wallet = %s", (wallet,))
+            user = cursor.fetchone()
+            if not user:
+                cursor.close()
+                conn.close()
+                return JSONResponse(
+                    status_code=404,
+                    content={"success": False, "error": "User not found"}
+                )
+            user_id = user['id_user']
+            
+            # Получаем ставки пользователя
+            cursor.execute("""
+                SELECT 
+                    ub.id_bet,
+                    ub.id_prediction,
+                    ub.chosen_outcome,
+                    ub.status,
+                    ub.created_at,
+                    ub.resolved_at,
+                    p.title,
+                    p.outcome_a,
+                    p.outcome_b,
+                    p.outcome_a_probability,
+                    p.outcome_b_probability,
+                    p.status as prediction_status,
+                    p.winner_outcome
+                FROM public.user_bets ub
+                JOIN public.predictions p ON ub.id_prediction = p.id_prediction
+                WHERE ub.id_user = %s
+                ORDER BY ub.created_at DESC
+            """, (user_id,))
+            
+            bets = cursor.fetchall()
+            cursor.close()
+            conn.close()
+            
+            bets_list = []
+            for bet in bets:
+                bets_list.append({
+                    "bet_id": bet['id_bet'],
+                    "prediction_id": bet['id_prediction'],
+                    "title": bet['title'],
+                    "chosen_outcome": bet['chosen_outcome'],
+                    "outcome_a": bet['outcome_a'],
+                    "outcome_b": bet['outcome_b'],
+                    "outcome_a_probability": float(bet['outcome_a_probability']) if bet['outcome_a_probability'] else 50.0,
+                    "outcome_b_probability": float(bet['outcome_b_probability']) if bet['outcome_b_probability'] else 50.0,
+                    "status": bet['status'],
+                    "prediction_status": bet['prediction_status'],
+                    "winner_outcome": bet['winner_outcome'],
+                    "created_at": str(bet['created_at']),
+                    "resolved_at": str(bet['resolved_at']) if bet['resolved_at'] else None
+                })
+            
+            return {
+                "success": True,
+                "bets": bets_list,
+                "count": len(bets_list)
+            }
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            print(f"Get user predictions bets error: {e}")
+            import traceback
+            traceback.print_exc()
+            return JSONResponse(
+                status_code=500,
+                content={"success": False, "error": f"Internal error: {str(e)}"}
+            )
+    
+    @app.post("/api/predictions/resolve/{prediction_id}")
+    async def resolve_prediction(prediction_id: int, request: Request):
+        """Разрешить пари (установить победителя)"""
+        try:
+            # Проверяем авторизацию (только админ может разрешать)
+            # Пока разрешаем всем авторизованным (можно добавить проверку роли)
+            x_wallet = request.headers.get("X-Wallet")
+            x_signature = request.headers.get("X-Signature")
+            x_message = request.headers.get("X-Message")
+            
+            if not x_wallet or not x_signature or not x_message:
+                auth_token = request.cookies.get("auth_token")
+                if not auth_token:
+                    return JSONResponse(
+                        status_code=401,
+                        content={"success": False, "error": "Unauthorized"}
+                    )
+            
+            # Получаем данные из тела запроса
+            body = await request.json()
+            winner_outcome = body.get("winner_outcome")  # 'A', 'B', или 'cancelled'
+            
+            if winner_outcome not in ['A', 'B', 'cancelled']:
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "error": "winner_outcome must be 'A', 'B', or 'cancelled'"}
+                )
+            
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            # Проверяем, что пари существует
+            cursor.execute("""
+                SELECT id_prediction, status FROM public.predictions 
+                WHERE id_prediction = %s
+            """, (prediction_id,))
+            prediction = cursor.fetchone()
+            
+            if not prediction:
+                cursor.close()
+                conn.close()
+                return JSONResponse(
+                    status_code=404,
+                    content={"success": False, "error": "Prediction not found"}
+                )
+            
+            # Обновляем пари
+            cursor.execute("""
+                UPDATE public.predictions 
+                SET status = 'resolved',
+                    winner_outcome = %s,
+                    updated_at = now()
+                WHERE id_prediction = %s
+            """, (winner_outcome, prediction_id))
+            
+            # Инициализируем список наград (для случая cancelled будет пустым)
+            rewards_summary = []
+            
+            # Обновляем статусы ставок
+            if winner_outcome == 'cancelled':
+                cursor.execute("""
+                    UPDATE public.user_bets 
+                    SET status = 'cancelled',
+                        resolved_at = now()
+                    WHERE id_prediction = %s AND status = 'pending'
+                """, (prediction_id,))
+            else:
+                # Получаем список выигравших пользователей
+                cursor.execute("""
+                    SELECT id_user FROM public.user_bets 
+                    WHERE id_prediction = %s 
+                    AND chosen_outcome = %s 
+                    AND status = 'pending'
+                """, (prediction_id, winner_outcome))
+                winning_users = cursor.fetchall()
+                
+                # Выдаем награды выигравшим пользователям
+                for user_row in winning_users:
+                    user_id = user_row['id_user']
+                    try:
+                        rewards_issued, reward_type, reward_data = issue_prediction_reward(cursor, conn, user_id)
+                        if rewards_issued:
+                            rewards_summary.append({
+                                "user_id": user_id,
+                                "rewards": rewards_issued
+                            })
+                    except Exception as e:
+                        print(f"Error issuing reward to user {user_id}: {e}")
+                        # Продолжаем обработку других пользователей
+                
+                # Помечаем выигравшие ставки
+                cursor.execute("""
+                    UPDATE public.user_bets 
+                    SET status = 'won',
+                        resolved_at = now(),
+                        reward_issued = TRUE
+                    WHERE id_prediction = %s 
+                    AND chosen_outcome = %s 
+                    AND status = 'pending'
+                """, (prediction_id, winner_outcome))
+                
+                # Помечаем проигравшие ставки
+                cursor.execute("""
+                    UPDATE public.user_bets 
+                    SET status = 'lost',
+                        resolved_at = now()
+                    WHERE id_prediction = %s 
+                    AND chosen_outcome != %s 
+                    AND status = 'pending'
+                """, (prediction_id, winner_outcome))
+            
+            conn.commit()
+            cursor.close()
+            conn.close()
+            
+            return {
+                "success": True,
+                "message": "Prediction resolved successfully",
+                "rewards_issued": len(rewards_summary) > 0,
+                "rewards_count": len(rewards_summary)
+            }
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            print(f"Resolve prediction error: {e}")
+            import traceback
+            traceback.print_exc()
+            return JSONResponse(
+                status_code=500,
+                content={"success": False, "error": f"Internal error: {str(e)}"}
+            )
     
     @app.get("/health")
     async def health_check():
