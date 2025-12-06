@@ -32,6 +32,10 @@ def get_db_connection():
     password = os.getenv("POSTGRES_PASSWORD", "12345")
     port = os.getenv("POSTGRES_PORT", "5432")
     
+    # Если хост "db" (имя контейнера), но мы запускаемся локально, используем localhost
+    if host == "db" and not os.path.exists("/.dockerenv"):
+        host = "localhost"
+    
     if host == "db":
         try:
             conn = psycopg2.connect(

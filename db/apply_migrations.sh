@@ -15,7 +15,19 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Режим работы (local или docker)
-MODE=${1:-"local"}
+# Автоматически определяем режим: если docker доступен и контейнер запущен, используем docker
+MODE=${1:-"auto"}
+
+# Автоопределение режима
+if [ "$MODE" = "auto" ]; then
+    if command -v docker > /dev/null 2>&1 && docker ps --format '{{.Names}}' | grep -q "^${POSTGRES_CONTAINER}$"; then
+        MODE="docker"
+        echo -e "${BLUE}Автоматически выбран режим: docker (контейнер ${POSTGRES_CONTAINER} найден)${NC}"
+    else
+        MODE="local"
+        echo -e "${BLUE}Автоматически выбран режим: local${NC}"
+    fi
+fi
 
 # Параметры подключения (можно переопределить через переменные окружения)
 POSTGRES_HOST=${POSTGRES_HOST:-"localhost"}
@@ -36,6 +48,9 @@ echo -e "${BLUE}=========================================="
 echo "Применение миграций базы данных"
 echo "==========================================${NC}"
 echo -e "Режим: ${YELLOW}${MODE}${NC}"
+if [ "$MODE" = "docker" ]; then
+    echo -e "Контейнер БД: ${YELLOW}${POSTGRES_CONTAINER}${NC}"
+fi
 echo ""
 
 # Проверка наличия папки миграций
@@ -137,42 +152,54 @@ generate_codes_docker() {
     
     echo -e "${YELLOW}  → Генерация ежедневных кодов для $db_name...${NC}"
     
+    # Пробуем использовать контейнер app, если он доступен и имеет файл
     if docker ps --format '{{.Names}}' | grep -q "^${APP_CONTAINER}$"; then
-        local output
-        output=$(docker exec -e POSTGRES_DB="$db_name" "$APP_CONTAINER" python3 /app/db/utils/generate_daily_codes.py 2>&1)
-        local exit_code=$?
-        
-        if [ $exit_code -eq 0 ]; then
-            echo -e "${GREEN}    ✓ Успешно${NC}"
-            echo "$output" | grep -E "(Generated|Skipped|Date range)" | sed 's/^/      /'
-            return 0
+        # Проверяем, существует ли файл в контейнере
+        if docker exec "$APP_CONTAINER" test -f /app/db/utils/generate_daily_codes.py 2>/dev/null; then
+            local output
+            output=$(docker exec -e POSTGRES_DB="$db_name" -e POSTGRES_HOST="db" -e POSTGRES_USER="$POSTGRES_USER" -e POSTGRES_PASSWORD="$POSTGRES_PASSWORD" -e POSTGRES_PORT="5432" "$APP_CONTAINER" python3 /app/db/utils/generate_daily_codes.py 2>&1)
+            local exit_code=$?
+            
+            if [ $exit_code -eq 0 ]; then
+                echo -e "${GREEN}    ✓ Успешно${NC}"
+                echo "$output" | grep -E "(Generated|Skipped|Date range)" | sed 's/^/      /'
+                return 0
+            else
+                echo -e "${YELLOW}    (ошибка в контейнере, переключаемся на локальный Python)${NC}"
+            fi
         else
-            echo -e "${RED}    ✗ Ошибка${NC}"
-            echo "$output" | head -5 | sed 's/^/      /'
-            return 1
+            echo -e "${YELLOW}    (файл не найден в контейнере, используем локальный Python)${NC}"
         fi
     else
-        # Fallback на локальный Python
         echo -e "${YELLOW}    (контейнер не найден, используем локальный Python)${NC}"
-        export POSTGRES_DB="$db_name"
-        export POSTGRES_HOST="$POSTGRES_HOST"
-        export POSTGRES_USER="$POSTGRES_USER"
-        export POSTGRES_PASSWORD="$POSTGRES_PASSWORD"
+    fi
+    
+    # Fallback на локальный Python
+    export POSTGRES_DB="$db_name"
+    # В режиме docker используем имя контейнера как хост
+    if [ "$MODE" = "docker" ]; then
+        export POSTGRES_HOST="localhost"
+        # Пробуем подключиться через порт, который проброшен на localhost
         export POSTGRES_PORT="$POSTGRES_PORT"
-        
-        local output
-        output=$(python3 "$GENERATE_CODES_SCRIPT" 2>&1)
-        local exit_code=$?
-        
-        if [ $exit_code -eq 0 ]; then
-            echo -e "${GREEN}    ✓ Успешно (локально)${NC}"
-            echo "$output" | grep -E "(Generated|Skipped|Date range)" | sed 's/^/      /'
-            return 0
-        else
-            echo -e "${RED}    ✗ Ошибка${NC}"
-            echo "$output" | head -5 | sed 's/^/      /'
-            return 1
-        fi
+    else
+        export POSTGRES_HOST="$POSTGRES_HOST"
+        export POSTGRES_PORT="$POSTGRES_PORT"
+    fi
+    export POSTGRES_USER="$POSTGRES_USER"
+    export POSTGRES_PASSWORD="$POSTGRES_PASSWORD"
+    
+    local output
+    output=$(python3 "$GENERATE_CODES_SCRIPT" 2>&1)
+    local exit_code=$?
+    
+    if [ $exit_code -eq 0 ]; then
+        echo -e "${GREEN}    ✓ Успешно (локально)${NC}"
+        echo "$output" | grep -E "(Generated|Skipped|Date range)" | sed 's/^/      /'
+        return 0
+    else
+        echo -e "${RED}    ✗ Ошибка${NC}"
+        echo "$output" | head -5 | sed 's/^/      /'
+        return 1
     fi
 }
 
@@ -183,6 +210,12 @@ check_connection() {
     if [ "$MODE" = "docker" ]; then
         if ! docker ps --format '{{.Names}}' | grep -q "^${POSTGRES_CONTAINER}$"; then
             echo -e "${RED}Ошибка: контейнер ${POSTGRES_CONTAINER} не запущен${NC}"
+            echo -e "${YELLOW}Попробуйте запустить: docker-compose up -d db${NC}"
+            return 1
+        fi
+        # Проверяем, что можем выполнить команду в контейнере
+        if ! docker exec "$POSTGRES_CONTAINER" psql -U "$POSTGRES_USER" -d "$db_name" -c "SELECT 1;" > /dev/null 2>&1; then
+            echo -e "${RED}Ошибка: не удалось подключиться к БД $db_name в контейнере${NC}"
             return 1
         fi
         return 0
@@ -192,6 +225,11 @@ check_connection() {
             return 0
         else
             echo -e "${RED}Ошибка: не удалось подключиться к БД $db_name${NC}"
+            echo -e "${YELLOW}Проверьте параметры подключения:${NC}"
+            echo -e "${YELLOW}  POSTGRES_HOST=$POSTGRES_HOST${NC}"
+            echo -e "${YELLOW}  POSTGRES_PORT=$POSTGRES_PORT${NC}"
+            echo -e "${YELLOW}  POSTGRES_USER=$POSTGRES_USER${NC}"
+            echo -e "${YELLOW}Или используйте режим docker: ./apply_migrations.sh docker${NC}"
             return 1
         fi
     fi
