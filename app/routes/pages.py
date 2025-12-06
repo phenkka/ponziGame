@@ -24,7 +24,7 @@ def setup_page_routes(app):
 
     @app.get("/predict")
     async def predict_page(request: Request, auth: dict = Depends(verify_session_cookie)):
-        return FileResponse("public/coming-soon.html")
+        return FileResponse("public/predict.html")
 
     @app.get("/cards")
     async def cards_page(request: Request, auth: dict = Depends(verify_session_cookie)):

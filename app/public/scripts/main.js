@@ -325,6 +325,7 @@ function showPage(pageId) {
   if (pageId === 'rules') { loadJackpot(); loadSuperJackpot(); }
   if (pageId === 'refferal') { loadJackpot(); loadSuperJackpot(); loadReferral(); }
   if (pageId === 'battle') { loadJackpot(); loadSuperJackpot(); }
+  if (pageId === 'predict') { loadJackpot(); loadSuperJackpot(); }
   if (pageId === 'cards' && (currentWallet || hasSession)) { loadJackpot(); loadSuperJackpot(); loadUserChests(currentWallet || localStorage.getItem('wallet')); loadUserCards(currentWallet || localStorage.getItem('wallet')); loadMyPacks(currentWallet || localStorage.getItem('wallet')); }
 }
 
@@ -704,18 +705,21 @@ async function loadJackpot() {
       const timerElRef = document.getElementById('rtj-timer-ref');
       const timerElCards = document.getElementById('rtj-timer-cards');
       const timerElBattle = document.getElementById('rtj-timer-battle');
+      const timerElPredict = document.getElementById('rtj-timer-predict');
       const amountElHome = document.getElementById('rtj-amount');
       const amountElShop = document.getElementById('rtj-amount-shop');
       const amountElRules = document.getElementById('rtj-amount-rules');
       const amountElRef = document.getElementById('rtj-amount-ref');
       const amountElCards = document.getElementById('rtj-amount-cards');
       const amountElBattle = document.getElementById('rtj-amount-battle');
+      const amountElPredict = document.getElementById('rtj-amount-predict');
       if (amountElHome) amountElHome.textContent = amountText;
       if (amountElShop) amountElShop.textContent = amountText;
       if (amountElRules) amountElRules.textContent = amountText;
       if (amountElRef) amountElRef.textContent = amountText;
       if (amountElCards) amountElCards.textContent = amountText;
       if (amountElBattle) amountElBattle.textContent = amountText;
+      if (amountElPredict) amountElPredict.textContent = amountText;
       
       // Load last jackpot data
       console.log('Loading last jackpot data...');
@@ -782,6 +786,7 @@ async function loadJackpot() {
       const lastAmountElRef = document.getElementById('lastj-amount-ref');
       const lastAmountElCards = document.getElementById('lastj-amount-cards');
       const lastAmountElBattle = document.getElementById('lastj-amount-battle');
+      const lastAmountElPredict = document.getElementById('lastj-amount-predict');
       
       const lastDateElHome = document.getElementById('lastj-date');
       const lastDateElShop = document.getElementById('lastj-date-shop');
@@ -789,6 +794,7 @@ async function loadJackpot() {
       const lastDateElRef = document.getElementById('lastj-date-ref');
       const lastDateElCards = document.getElementById('lastj-date-cards');
       const lastDateElBattle = document.getElementById('lastj-date-battle');
+      const lastDateElPredict = document.getElementById('lastj-date-predict');
       
       if (lastAmountElHome) lastAmountElHome.textContent = lastAmountText;
       if (lastAmountElShop) lastAmountElShop.textContent = lastAmountText;
@@ -796,6 +802,7 @@ async function loadJackpot() {
       if (lastAmountElRef) lastAmountElRef.textContent = lastAmountText;
       if (lastAmountElCards) lastAmountElCards.textContent = lastAmountText;
       if (lastAmountElBattle) lastAmountElBattle.textContent = lastAmountText;
+      if (lastAmountElPredict) lastAmountElPredict.textContent = lastAmountText;
       
       if (lastDateElHome) lastDateElHome.textContent = lastDateText;
       if (lastDateElShop) lastDateElShop.textContent = lastDateText;
@@ -803,6 +810,7 @@ async function loadJackpot() {
       if (lastDateElRef) lastDateElRef.textContent = lastDateText;
       if (lastDateElCards) lastDateElCards.textContent = lastDateText;
       if (lastDateElBattle) lastDateElBattle.textContent = lastDateText;
+      if (lastDateElPredict) lastDateElPredict.textContent = lastDateText;
       
       if (jackpotTimerInterval) clearInterval(jackpotTimerInterval);
       const endsAt = new Date(data.endsAt);
@@ -819,6 +827,7 @@ async function loadJackpot() {
         if (timerElRef) timerElRef.textContent = timerText;
         if (timerElCards) timerElCards.textContent = timerText;
         if (timerElBattle) timerElBattle.textContent = timerText;
+        if (timerElPredict) timerElPredict.textContent = timerText;
         if (diff <= 0) { clearInterval(jackpotTimerInterval); await drawJackpot(); await loadJackpot(); }
       };
       updateTimer();
@@ -843,24 +852,28 @@ async function loadJackpot() {
       const amountElRef2 = document.getElementById('rtj-amount-ref');
       const amountElCards2 = document.getElementById('rtj-amount-cards');
       const amountElBattle2 = document.getElementById('rtj-amount-battle');
+      const amountElPredict2 = document.getElementById('rtj-amount-predict');
       const timerElHome2 = document.getElementById('rtj-timer');
       const timerElShop2 = document.getElementById('rtj-timer-shop');
       const timerElRules2 = document.getElementById('rtj-timer-rules');
       const timerElRef2 = document.getElementById('rtj-timer-ref');
       const timerElCards2 = document.getElementById('rtj-timer-cards');
       const timerElBattle2 = document.getElementById('rtj-timer-battle');
+      const timerElPredict2 = document.getElementById('rtj-timer-predict');
       if (amountElHome2) amountElHome2.textContent = amountErr;
       if (amountElShop2) amountElShop2.textContent = amountErr;
       if (amountElRules2) amountElRules2.textContent = amountErr;
       if (amountElRef2) amountElRef2.textContent = amountErr;
       if (amountElCards2) amountElCards2.textContent = amountErr;
       if (amountElBattle2) amountElBattle2.textContent = amountErr;
+      if (amountElPredict2) amountElPredict2.textContent = amountErr;
       if (timerElHome2) timerElHome2.textContent = timerErr;
       if (timerElShop2) timerElShop2.textContent = timerErr;
       if (timerElRules2) timerElRules2.textContent = timerErr;
       if (timerElRef2) timerElRef2.textContent = timerErr;
       if (timerElCards2) timerElCards2.textContent = timerErr;
       if (timerElBattle2) timerElBattle2.textContent = timerErr;
+      if (timerElPredict2) timerElPredict2.textContent = timerErr;
     }
   } catch (e) {
     const amountElHome3 = document.getElementById('rtj-amount');
@@ -869,24 +882,28 @@ async function loadJackpot() {
     const amountElRef3 = document.getElementById('rtj-amount-ref');
     const amountElCards3 = document.getElementById('rtj-amount-cards');
     const amountElBattle3 = document.getElementById('rtj-amount-battle');
+    const amountElPredict3 = document.getElementById('rtj-amount-predict');
     const timerElHome3 = document.getElementById('rtj-timer');
     const timerElShop3 = document.getElementById('rtj-timer-shop');
     const timerElRules3 = document.getElementById('rtj-timer-rules');
     const timerElRef3 = document.getElementById('rtj-timer-ref');
     const timerElCards3 = document.getElementById('rtj-timer-cards');
     const timerElBattle3 = document.getElementById('rtj-timer-battle');
+    const timerElPredict3 = document.getElementById('rtj-timer-predict');
     if (amountElHome3) amountElHome3.textContent = 'Load error';
     if (amountElShop3) amountElShop3.textContent = 'Load error';
     if (amountElRules3) amountElRules3.textContent = 'Load error';
     if (amountElRef3) amountElRef3.textContent = 'Load error';
     if (amountElCards3) amountElCards3.textContent = 'Load error';
     if (amountElBattle3) amountElBattle3.textContent = 'Load error';
+    if (amountElPredict3) amountElPredict3.textContent = 'Load error';
     if (timerElHome3) timerElHome3.textContent = 'Time Left: --:--:--';
     if (timerElShop3) timerElShop3.textContent = 'Time Left: --:--:--';
     if (timerElRules3) timerElRules3.textContent = 'Time Left: --:--:--';
     if (timerElRef3) timerElRef3.textContent = 'Time Left: --:--:--';
     if (timerElCards3) timerElCards3.textContent = 'Time Left: --:--:--';
     if (timerElBattle3) timerElBattle3.textContent = 'Time Left: --:--:--';
+    if (timerElPredict3) timerElPredict3.textContent = 'Time Left: --:--:--';
   }
 }
 
@@ -1122,7 +1139,8 @@ async function loadSuperJackpot() {
         document.getElementById('superj-amount-cards'),      // cards
         document.getElementById('superj-amount-battle'),     // battle
         document.getElementById('superj-amount-ref'),        // referral
-        document.getElementById('superj-amount-rules')       // rules
+        document.getElementById('superj-amount-rules'),      // rules
+        document.getElementById('superj-amount-predict')     // predict
       ];
       
       amountEls.forEach(el => {
@@ -1146,7 +1164,8 @@ async function loadSuperJackpot() {
         document.getElementById('superj-amount-cards'),
         document.getElementById('superj-amount-battle'),
         document.getElementById('superj-amount-ref'),
-        document.getElementById('superj-amount-rules')
+        document.getElementById('superj-amount-rules'),
+        document.getElementById('superj-amount-predict')
       ];
       amountEls.forEach(el => {
         if (el) el.textContent = '0 $TOKENS';

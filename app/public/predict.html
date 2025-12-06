@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Predict</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto+Flex:opsz,wght@8..144,100;8..144,800;8..144,900&family=Inter:wght@400&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/style.css">
+    <script src="https://unpkg.com/@solana/web3.js@1.95.3/lib/index.iife.min.js"></script>
+    <script>
+        // Buffer polyfill for browser
+        if (typeof Buffer === 'undefined') {
+            window.Buffer = {
+                from: (data, encoding) => {
+                    if (typeof data === 'string') {
+                        return new TextEncoder().encode(data);
+                    }
+                    return new Uint8Array(data);
+                },
+                isBuffer: (obj) => {
+                    return obj instanceof Uint8Array;
+                }
+            };
+        }
+    </script>
+</head>
+<body class="page-predict">
+    <!-- Header -->
+    <header class="header">
+        <div class="header-content">
+            <div id="user-section" class="user-info hidden">
+                <div class="user-dropdown">
+                    <button class="user-dropdown-button" id="userDropdownButton">
+                        <span class="wallet-address-short" id="wallet-address-short"></span>
+                        <span class="dropdown-arrow">▼</span>
+                    </button>
+                    <div class="user-dropdown-content" id="userDropdownContent">
+                        <div class="dropdown-balance">
+                            <span class="balance-label">Balance:</span>
+                            <span class="balance-amount" id="balance">0.0000 TOKENS</span>
+                        </div>
+                        <div class="dropdown-actions">
+                            <button class="dropdown-logout-button" id="logoutButton">LOG OUT</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="auth-button-section" class="auth-header">
+                <div class="header-nav">
+                    <button class="nav-button" id="shopButton">SHOP</button>
+                    <button class="nav-button" id="rulesButton">RULES</button>
+                </div>
+                <button id="authButtonHeader" class="connect-wallet-button">CONNECT WALLET</button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="main-content">
+        <!-- Predict Page -->
+        <div id="predict-page" class="page" style="display: block;">
+            <!-- Dynamic Menu -->
+            <div class="dynamic-menu-container">
+                <div class="dynamic-menu-trigger"></div>
+                <div class="dynamic-menu-overlay"></div>
+                <nav class="dynamic-menu">
+                    <div class="dynamic-menu-header">
+                        <div class="shop-brand">$TOKENS</div>
+                    </div>
+                    <div class="dynamic-menu-items">
+                        <a href="/shop" class="dynamic-menu-item" data-page="shop">
+                            <img src="img/menu/shop.png" alt="Shop" class="menu-icon">
+                            <span class="menu-text">shop</span>
+                        </a>
+                        <a href="/cards" class="dynamic-menu-item" data-page="cards">
+                            <img src="img/menu/cards.png" alt="Cards" class="menu-icon">
+                            <span class="menu-text">my collection</span>
+                        </a>
+                        <a href="/battle" class="dynamic-menu-item" data-page="battle">
+                            <img src="img/menu/battle.png" alt="Battle" class="menu-icon">
+                            <span class="menu-text">battle</span>
+                        </a>
+                        <a href="/predict" class="dynamic-menu-item active" data-page="predict">
+                            <img src="img/menu/predict.png" alt="Predict" class="menu-icon">
+                            <span class="menu-text">predict</span>
+                        </a>
+                        <a href="/profile" class="dynamic-menu-item" data-page="profile">
+                            <img src="img/menu/profile.png" alt="Profile" class="menu-icon">
+                            <span class="menu-text">profile</span>
+                        </a>
+                        <a href="/rules" class="dynamic-menu-item" data-page="rules">
+                            <img src="img/menu/rules.png" alt="Rules" class="menu-icon">
+                            <span class="menu-text">rules</span>
+                        </a>
+                    </div>
+                </nav>
+            </div>
+            
+            <div class="shop-layout">
+                <div class="shop-content">
+                    <!-- Animated jackpot container for non-home pages -->
+                    <div class="jackpot-carousel">
+                        <div class="jackpot-carousel-track">
+                            <!-- Current Jackpot -->
+                            <div class="jackpot-carousel-item active">
+                                <div class="jackpot-card">
+                                    <div class="jackpot-title">EVERYDAY LOTTERY</div>
+                                    <div class="jackpot-amount" id="rtj-amount-predict">Loading...</div>
+                                    <div class="jackpot-timer" id="rtj-timer-predict">Time Left: --:--:--</div>
+                                </div>
+                            </div>
+
+                            <!-- Last Jackpot -->
+                            <div class="jackpot-carousel-item">
+                                <div class="last-card">
+                                    <div class="last-header">
+                                        <div class="last-title">LAST JACKPOT</div>
+                                    </div>
+                                    <div class="last-prize-section">
+                                        <div class="last-subtitle">Prize pool:</div>
+                                        <div class="last-amount" id="lastj-amount-predict">0 $TOKENS</div>
+                                    </div>
+                                    <div class="last-winner-section" id="lastj-winner-predict" style="display: none;">
+                                        <div class="winner-wallet" style="color: #6E6BFF; font-size: 24px;">
+                                            Wallet winner: <span id="lastj-winner-wallet-predict">-</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Super Jackpot -->
+                            <div class="jackpot-carousel-item">
+                                <div class="super-jackpot-card">
+                                    <div class="super-jackpot-title">SUPER JACKPOT</div>
+                                    <div class="super-jackpot-amount" id="superj-amount-predict">0 $TOKENS</div>
+                                    <div class="super-jackpot-description">Collect all cards to win!</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Predict Section -->
+                    <section class="predict-section" style="margin-top: 4vh;">
+                        <h2 class="packs-title">PREDICT</h2>
+                        
+                        <!-- Active Predictions Block -->
+                        <div class="predict-block" style="margin-bottom: 4vh;">
+                            <h3 class="packs-title" style="font-size: 28px; margin-bottom: 2vh;">ACTIVE PREDICTIONS</h3>
+                            <div class="predict-container" id="predict-content">
+                                <div style="color: white; text-align: center; padding: 20px;">
+                                    Loading predictions...
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- My Bets Block -->
+                        <div class="predict-block" style="margin-top: 4vh;">
+                            <h3 class="packs-title" style="font-size: 28px; margin-bottom: 2vh;">MY BETS</h3>
+                            <div class="predict-bets-container" id="predict-bets-content">
+                                <div style="color: #9aa0a6; text-align: center; padding: 20px;">
+                                    No bets yet
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+
+                    <!-- Footer -->
+                    <div class="shop-footer" style="margin-top: 12vh;">
+                        <div class="footer-title">EVERY PULL DRAINS YOUR HOPE. EVERY TICKET FUELS YOUR LUCK.</div>
+                        <div class="footer-links">
+                            <a href="https://t.me/tiredctoo" class="footer-link">Telegram</a>
+                            <a href="https://sotiredbro.com" class="footer-link">sotiredbro.com</a>
+                            <a href="https://x.com/imtiredofcrypto" class="footer-link">x.com</a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script src="scripts/main.js"></script>
+    <script src="scripts/dynamic-menu.js"></script>
+    <script src="scripts/predict.js"></script>
+    <script src="scripts/page-init.js"></script>
+
+    <!-- Purchase / Open Modal -->
+    <div id="modal-overlay" class="modal-overlay hidden"></div>
+    <div id="purchase-modal" class="modal hidden">
+        <div class="modal-body" id="modal-body">
+            <!-- dynamic content -->
+        </div>
+    </div>
+
+    <!-- Message notification -->
+    <div id="message" class="hidden"></div>
+</body>
+</html>
+

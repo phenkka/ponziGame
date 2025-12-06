@@ -1128,6 +1128,106 @@ def process_daily_checkin(cursor, conn, user_id: int, daily_code: str) -> dict:
     }
 
 
+def issue_prediction_reward(cursor, conn, user_id: int) -> tuple:
+    """
+    Выдает награду пользователю за выигрыш в пари.
+    Возвращает (rewards_issued, reward_type, reward_data)
+    
+    Логика наград:
+    - 40% - 3 Broken пака (id_chest = 5)
+    - 25% - 1 Common пак (id_chest = 1)
+    - 10% - 1 Legendary пак (id_chest = 4)
+    - 20% - карточка Common или Rare
+    - 5% - персональное увеличение шансов на 24 часа (+10% к шансу выпадения legendary)
+    """
+    import random
+    from datetime import datetime, timedelta
+    import json
+    
+    rewards_issued = []
+    reward_type = None
+    reward_data = None
+    
+    # Генерируем награду на основе вероятностей
+    roll = random.random() * 100
+    
+    if roll < 40:  # 40% - 3 broken пака (id_chest = 5)
+        reward_type = "broken_packs"
+        reward_data = {"quantity": 3, "id_chest": 5}
+        # Выдаем 3 broken пака
+        for _ in range(3):
+            cursor.execute("""
+                INSERT INTO Chest_purchases (id_user, id_chest, tx_signature)
+                VALUES (%s, %s, %s)
+            """, (user_id, 5, f"prediction_reward_{user_id}_{random.randint(100000, 999999)}"))
+        rewards_issued.append({"type": "broken_packs", "quantity": 3})
+    
+    elif roll < 65:  # 25% - 1 Common пак (id_chest = 1)
+        reward_type = "common_pack"
+        reward_data = {"quantity": 1, "id_chest": 1}
+        cursor.execute("""
+            INSERT INTO Chest_purchases (id_user, id_chest, tx_signature)
+            VALUES (%s, %s, %s)
+        """, (user_id, 1, f"prediction_reward_{user_id}_{random.randint(100000, 999999)}"))
+        rewards_issued.append({"type": "common_pack", "quantity": 1})
+    
+    elif roll < 75:  # 10% - 1 Legendary пак (id_chest = 4)
+        reward_type = "legendary_pack"
+        reward_data = {"quantity": 1, "id_chest": 4}
+        cursor.execute("""
+            INSERT INTO Chest_purchases (id_user, id_chest, tx_signature)
+            VALUES (%s, %s, %s)
+        """, (user_id, 4, f"prediction_reward_{user_id}_{random.randint(100000, 999999)}"))
+        rewards_issued.append({"type": "legendary_pack", "quantity": 1})
+    
+    elif roll < 95:  # 20% - карточка Common или Rare
+        reward_type = "card"
+        # Выбираем случайную редкость: 60% Common, 40% Rare
+        card_rarity = "basic" if random.random() < 0.6 else "rare"
+        reward_data = {"rarity": card_rarity}
+        
+        # Выдаем случайную карту указанной редкости
+        card = get_random_card_by_rarity(card_rarity, cursor)
+        if card:
+            cursor.execute("""
+                INSERT INTO Card_User (id_user, id_card, quantity)
+                VALUES (%s, %s, 1)
+                ON CONFLICT (id_user, id_card) DO UPDATE SET quantity = Card_User.quantity + 1
+            """, (user_id, card['id_card']))
+            rewards_issued.append({
+                "type": "card",
+                "card_id": card['id_card'],
+                "card_name": card.get('name'),
+                "rarity": card_rarity
+            })
+    
+    else:  # 5% - персональное увеличение шансов на 24 часа (+10% к шансу выпадения legendary)
+        reward_type = "boost"
+        expires_at = datetime.now() + timedelta(hours=24)
+        reward_data = {
+            "boost_type": "legendary_chance",
+            "boost_value": 10.0,
+            "expires_at": expires_at.isoformat()
+        }
+        
+        # Сохраняем boost в БД
+        cursor.execute("""
+            INSERT INTO User_boost (id_user, boost_type, boost_value, expires_at)
+            VALUES (%s, %s, %s, %s)
+        """, (user_id, "legendary_chance", 10.0, expires_at))
+        
+        rewards_issued.append({
+            "type": "boost",
+            "boost_type": "legendary_chance",
+            "boost_value": 10.0,
+            "expires_at": expires_at.isoformat()
+        })
+    
+    conn.commit()
+    
+    return (rewards_issued, reward_type, reward_data)
+
+
 def get_user_active_boost(cursor, user_id: int) -> dict:
     """Получает активный boost пользователя (увеличение шансов)"""
     from datetime import datetime

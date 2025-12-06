@@ -18,6 +18,7 @@ PUBLIC_API_ENDPOINTS = [
     "/api/jackpot/last",
     "/api/jackpot/draw",  # Публичный розыгрыш джекпота
     "/api/super-jackpot",
+    "/api/predictions/markets",  # Публичный просмотр активных пари
     "/health",
 ]
 

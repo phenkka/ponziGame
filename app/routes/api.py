@@ -7,7 +7,7 @@ import os
 import requests
 
 from core.models import AuthRequest
-from core.utils import get_db_connection, generate_ref_code, verify_solana_signature, verify_solana_transaction, HELIUS_RPC_URL, determine_card_rarity, get_random_card_by_rarity, get_or_create_active_round, add_to_jackpot, draw_jackpot, add_to_super_jackpot, claim_super_jackpot, get_or_create_active_super_jackpot_round, get_today_daily_code, get_user_checkin_status, process_daily_checkin, get_user_active_boost
+from core.utils import get_db_connection, generate_ref_code, verify_solana_signature, verify_solana_transaction, HELIUS_RPC_URL, determine_card_rarity, get_random_card_by_rarity, get_or_create_active_round, add_to_jackpot, draw_jackpot, add_to_super_jackpot, claim_super_jackpot, get_or_create_active_super_jackpot_round, get_today_daily_code, get_user_checkin_status, process_daily_checkin, get_user_active_boost, issue_prediction_reward
 from core.auth import verify_auth
 from pydantic import BaseModel
 
@@ -2295,6 +2295,416 @@ def setup_api_routes(app):
             
         except Exception as e:
             print(f"Get battle status error: {e}")
+            return JSONResponse(
+                status_code=500,
+                content={"success": False, "error": f"Internal error: {str(e)}"}
+            )
+    
+    # ==================== PREDICTIONS API ====================
+    
+    @app.get("/api/predictions/markets")
+    async def get_predictions_markets(
+        period: str = "24h",
+        limit: int = 20,
+        force_refresh: bool = False
+    ):
+        """Получить список активных пари"""
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            # Если force_refresh, можно запустить синхронизацию (но это долго, лучше не делать)
+            # Просто получаем из БД
+            
+            # Определяем сортировку по периоду
+            order_by = "volume_24h DESC"
+            if period == "7d":
+                order_by = "volume_7d DESC"
+            elif period == "30d":
+                order_by = "volume_30d DESC"
+            
+            cursor.execute(f"""
+                SELECT 
+                    id_prediction,
+                    polymarket_id,
+                    title,
+                    description,
+                    category,
+                    outcome_a,
+                    outcome_b,
+                    outcome_a_probability,
+                    outcome_b_probability,
+                    resolution_date,
+                    status,
+                    volume_24h,
+                    volume_7d,
+                    volume_30d,
+                    created_at,
+                    updated_at
+                FROM public.predictions
+                WHERE status = 'active'
+                ORDER BY {order_by}
+                LIMIT %s
+            """, (limit,))
+            
+            markets = cursor.fetchall()
+            cursor.close()
+            conn.close()
+            
+            # Преобразуем в список словарей
+            markets_list = []
+            for market in markets:
+                markets_list.append({
+                    "id_prediction": market['id_prediction'],
+                    "polymarket_id": market['polymarket_id'],
+                    "title": market['title'],
+                    "description": market.get('description', ''),
+                    "category": market.get('category', 'general'),
+                    "outcome_a": market['outcome_a'],
+                    "outcome_b": market['outcome_b'],
+                    "outcome_a_probability": float(market['outcome_a_probability']) if market['outcome_a_probability'] else 50.0,
+                    "outcome_b_probability": float(market['outcome_b_probability']) if market['outcome_b_probability'] else 50.0,
+                    "resolution_date": str(market['resolution_date']) if market['resolution_date'] else None,
+                    "status": market['status'],
+                    "volume_24h": float(market['volume_24h']) if market['volume_24h'] else 0.0,
+                    "volume_7d": float(market['volume_7d']) if market['volume_7d'] else 0.0,
+                    "volume_30d": float(market['volume_30d']) if market['volume_30d'] else 0.0
+                })
+            
+            return {
+                "success": True,
+                "markets": markets_list,
+                "count": len(markets_list)
+            }
+            
+        except Exception as e:
+            print(f"Get predictions markets error: {e}")
+            import traceback
+            traceback.print_exc()
+            return JSONResponse(
+                status_code=500,
+                content={"success": False, "error": f"Internal error: {str(e)}"}
+            )
+    
+    @app.post("/api/predictions/bet/{wallet}")
+    async def create_prediction_bet(wallet: str, request: Request):
+        """Создать ставку на пари"""
+        try:
+            # Проверяем авторизацию
+            await _ensure_authorized_user(request, wallet)
+            
+            # Получаем данные из тела запроса
+            body = await request.json()
+            prediction_id = body.get("prediction_id")
+            chosen_outcome = body.get("chosen_outcome")
+            
+            if not prediction_id or not chosen_outcome:
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "error": "Missing prediction_id or chosen_outcome"}
+                )
+            
+            if chosen_outcome not in ['A', 'B']:
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "error": "chosen_outcome must be 'A' or 'B'"}
+                )
+            
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            # Получаем пользователя
+            cursor.execute("SELECT id_user FROM Users WHERE wallet = %s", (wallet,))
+            user = cursor.fetchone()
+            if not user:
+                cursor.close()
+                conn.close()
+                return JSONResponse(
+                    status_code=404,
+                    content={"success": False, "error": "User not found"}
+                )
+            user_id = user['id_user']
+            
+            # Проверяем, что пари существует и активно
+            cursor.execute("""
+                SELECT id_prediction, status FROM public.predictions 
+                WHERE id_prediction = %s
+            """, (prediction_id,))
+            prediction = cursor.fetchone()
+            
+            if not prediction:
+                cursor.close()
+                conn.close()
+                return JSONResponse(
+                    status_code=404,
+                    content={"success": False, "error": "Prediction not found"}
+                )
+            
+            if prediction['status'] != 'active':
+                cursor.close()
+                conn.close()
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "error": "Prediction is not active"}
+                )
+            
+            # Проверяем, нет ли уже ставки от этого пользователя
+            cursor.execute("""
+                SELECT id_bet FROM public.user_bets 
+                WHERE id_user = %s AND id_prediction = %s
+            """, (user_id, prediction_id))
+            existing_bet = cursor.fetchone()
+            
+            if existing_bet:
+                cursor.close()
+                conn.close()
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "error": "Bet already exists for this prediction"}
+                )
+            
+            # Создаем ставку
+            cursor.execute("""
+                INSERT INTO public.user_bets (id_user, id_prediction, chosen_outcome, status)
+                VALUES (%s, %s, %s, %s)
+                RETURNING id_bet
+            """, (user_id, prediction_id, chosen_outcome, 'pending'))
+            
+            bet = cursor.fetchone()
+            bet_id = bet['id_bet']
+            
+            conn.commit()
+            cursor.close()
+            conn.close()
+            
+            return {
+                "success": True,
+                "bet_id": bet_id,
+                "message": "Bet placed successfully"
+            }
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            print(f"Create prediction bet error: {e}")
+            import traceback
+            traceback.print_exc()
+            return JSONResponse(
+                status_code=500,
+                content={"success": False, "error": f"Internal error: {str(e)}"}
+            )
+    
+    @app.get("/api/predictions/user/{wallet}")
+    async def get_user_predictions_bets(wallet: str, request: Request):
+        """Получить ставки пользователя"""
+        try:
+            # Проверяем авторизацию
+            await _ensure_authorized_user(request, wallet)
+            
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            # Получаем пользователя
+            cursor.execute("SELECT id_user FROM Users WHERE wallet = %s", (wallet,))
+            user = cursor.fetchone()
+            if not user:
+                cursor.close()
+                conn.close()
+                return JSONResponse(
+                    status_code=404,
+                    content={"success": False, "error": "User not found"}
+                )
+            user_id = user['id_user']
+            
+            # Получаем ставки пользователя
+            cursor.execute("""
+                SELECT 
+                    ub.id_bet,
+                    ub.id_prediction,
+                    ub.chosen_outcome,
+                    ub.status,
+                    ub.created_at,
+                    ub.resolved_at,
+                    p.title,
+                    p.outcome_a,
+                    p.outcome_b,
+                    p.outcome_a_probability,
+                    p.outcome_b_probability,
+                    p.status as prediction_status,
+                    p.winner_outcome
+                FROM public.user_bets ub
+                JOIN public.predictions p ON ub.id_prediction = p.id_prediction
+                WHERE ub.id_user = %s
+                ORDER BY ub.created_at DESC
+            """, (user_id,))
+            
+            bets = cursor.fetchall()
+            cursor.close()
+            conn.close()
+            
+            bets_list = []
+            for bet in bets:
+                bets_list.append({
+                    "bet_id": bet['id_bet'],
+                    "prediction_id": bet['id_prediction'],
+                    "title": bet['title'],
+                    "chosen_outcome": bet['chosen_outcome'],
+                    "outcome_a": bet['outcome_a'],
+                    "outcome_b": bet['outcome_b'],
+                    "outcome_a_probability": float(bet['outcome_a_probability']) if bet['outcome_a_probability'] else 50.0,
+                    "outcome_b_probability": float(bet['outcome_b_probability']) if bet['outcome_b_probability'] else 50.0,
+                    "status": bet['status'],
+                    "prediction_status": bet['prediction_status'],
+                    "winner_outcome": bet['winner_outcome'],
+                    "created_at": str(bet['created_at']),
+                    "resolved_at": str(bet['resolved_at']) if bet['resolved_at'] else None
+                })
+            
+            return {
+                "success": True,
+                "bets": bets_list,
+                "count": len(bets_list)
+            }
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            print(f"Get user predictions bets error: {e}")
+            import traceback
+            traceback.print_exc()
+            return JSONResponse(
+                status_code=500,
+                content={"success": False, "error": f"Internal error: {str(e)}"}
+            )
+    
+    @app.post("/api/predictions/resolve/{prediction_id}")
+    async def resolve_prediction(prediction_id: int, request: Request):
+        """Разрешить пари (установить победителя)"""
+        try:
+            # Проверяем авторизацию (только админ может разрешать)
+            # Пока разрешаем всем авторизованным (можно добавить проверку роли)
+            x_wallet = request.headers.get("X-Wallet")
+            x_signature = request.headers.get("X-Signature")
+            x_message = request.headers.get("X-Message")
+            
+            if not x_wallet or not x_signature or not x_message:
+                auth_token = request.cookies.get("auth_token")
+                if not auth_token:
+                    return JSONResponse(
+                        status_code=401,
+                        content={"success": False, "error": "Unauthorized"}
+                    )
+            
+            # Получаем данные из тела запроса
+            body = await request.json()
+            winner_outcome = body.get("winner_outcome")  # 'A', 'B', или 'cancelled'
+            
+            if winner_outcome not in ['A', 'B', 'cancelled']:
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "error": "winner_outcome must be 'A', 'B', or 'cancelled'"}
+                )
+            
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            # Проверяем, что пари существует
+            cursor.execute("""
+                SELECT id_prediction, status FROM public.predictions 
+                WHERE id_prediction = %s
+            """, (prediction_id,))
+            prediction = cursor.fetchone()
+            
+            if not prediction:
+                cursor.close()
+                conn.close()
+                return JSONResponse(
+                    status_code=404,
+                    content={"success": False, "error": "Prediction not found"}
+                )
+            
+            # Обновляем пари
+            cursor.execute("""
+                UPDATE public.predictions 
+                SET status = 'resolved',
+                    winner_outcome = %s,
+                    updated_at = now()
+                WHERE id_prediction = %s
+            """, (winner_outcome, prediction_id))
+            
+            # Инициализируем список наград (для случая cancelled будет пустым)
+            rewards_summary = []
+            
+            # Обновляем статусы ставок
+            if winner_outcome == 'cancelled':
+                cursor.execute("""
+                    UPDATE public.user_bets 
+                    SET status = 'cancelled',
+                        resolved_at = now()
+                    WHERE id_prediction = %s AND status = 'pending'
+                """, (prediction_id,))
+            else:
+                # Получаем список выигравших пользователей
+                cursor.execute("""
+                    SELECT id_user FROM public.user_bets 
+                    WHERE id_prediction = %s 
+                    AND chosen_outcome = %s 
+                    AND status = 'pending'
+                """, (prediction_id, winner_outcome))
+                winning_users = cursor.fetchall()
+                
+                # Выдаем награды выигравшим пользователям
+                for user_row in winning_users:
+                    user_id = user_row['id_user']
+                    try:
+                        rewards_issued, reward_type, reward_data = issue_prediction_reward(cursor, conn, user_id)
+                        if rewards_issued:
+                            rewards_summary.append({
+                                "user_id": user_id,
+                                "rewards": rewards_issued
+                            })
+                    except Exception as e:
+                        print(f"Error issuing reward to user {user_id}: {e}")
+                        # Продолжаем обработку других пользователей
+                
+                # Помечаем выигравшие ставки
+                cursor.execute("""
+                    UPDATE public.user_bets 
+                    SET status = 'won',
+                        resolved_at = now(),
+                        reward_issued = TRUE
+                    WHERE id_prediction = %s 
+                    AND chosen_outcome = %s 
+                    AND status = 'pending'
+                """, (prediction_id, winner_outcome))
+                
+                # Помечаем проигравшие ставки
+                cursor.execute("""
+                    UPDATE public.user_bets 
+                    SET status = 'lost',
+                        resolved_at = now()
+                    WHERE id_prediction = %s 
+                    AND chosen_outcome != %s 
+                    AND status = 'pending'
+                """, (prediction_id, winner_outcome))
+            
+            conn.commit()
+            cursor.close()
+            conn.close()
+            
+            return {
+                "success": True,
+                "message": "Prediction resolved successfully",
+                "rewards_issued": len(rewards_summary) > 0,
+                "rewards_count": len(rewards_summary)
+            }
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            print(f"Resolve prediction error: {e}")
+            import traceback
+            traceback.print_exc()
             return JSONResponse(
                 status_code=500,
                 content={"success": False, "error": f"Internal error: {str(e)}"}

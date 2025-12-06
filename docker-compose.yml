@@ -11,8 +11,15 @@ services:
       - ./db/init.sql:/docker-entrypoint-initdb.d/01_init.sql
       - ./db/insert.sql:/docker-entrypoint-initdb.d/02_inserts.sql
       - ./db/03_init_test_db.sh:/docker-entrypoint-initdb.d/03_init_test_db.sh
+      - ./db/04_apply_migrations.sh:/docker-entrypoint-initdb.d/04_apply_migrations.sh
+      - ./db/migrations:/docker-entrypoint-initdb.d/migrations
     ports:
       - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-admin} -d ${POSTGRES_DB:-lab}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
     networks:
       - gamba
 
@@ -35,6 +42,20 @@ services:
       - db
     ports:
       - "8000:8000"
+    networks:
+      - gamba
+
+  polymarket_sync:
+    build: ./app
+    env_file: .env
+    container_name: gamba_polymarket_sync
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      - PYTHONUNBUFFERED=1
+    command: python -u services/polymarket_sync.py --daemon --interval 3600 --target 20
+    restart: unless-stopped
     networks:
       - gamba
 

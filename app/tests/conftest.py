@@ -71,6 +71,8 @@ def clean_db(db_connection):
         cursor.execute("DELETE FROM Daily_checkins")  # Очищаем чекины
         cursor.execute("DELETE FROM Daily_codes")  # Очищаем коды (будут пересозданы при необходимости)
         cursor.execute("DELETE FROM Battles")  # Очищаем батлы
+        cursor.execute("DELETE FROM User_bets")  # Очищаем ставки на пари
+        cursor.execute("DELETE FROM predictions")  # Очищаем пари
         cursor.execute("DELETE FROM Users")
         # Удаляем тестовые карты (с image_key, начинающимся с 'TEST_')
         # Сначала удаляем связанные записи в Card_User

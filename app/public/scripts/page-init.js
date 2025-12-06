@@ -168,6 +168,56 @@ function initRulesPage() {
     }
 }
 
+// Initialize predict page when loaded
+function initPredictPageFromPageInit() {
+    console.log('Predict page loaded (page-init.js)');
+    
+    // Load jackpots (public data)
+    loadJackpot(); // Load jackpot info
+    loadSuperJackpot(); // Load super jackpot info
+    
+    // Check if user is authenticated (optional for predict page)
+    const storedWallet = sessionStorage.getItem('wallet');
+    console.log('Stored wallet:', storedWallet);
+    
+    if (storedWallet) {
+        // User is authenticated, show user info
+        fetch(`/api/user/${storedWallet}`).then(r => r.json()).then(d => { 
+            console.log('User data:', d);
+            if (d && d.success) {
+                showUserInfo(storedWallet, d.user.ref_code, { redirect: false });
+            }
+        }).catch(e => console.error('Error loading user data:', e));
+    }
+    
+    // Initialize predict page functionality from predict.js (always, even without auth)
+    // Пробуем несколько раз, так как predict.js может загружаться асинхронно
+    let attempts = 0;
+    const maxAttempts = 5;
+    
+    function tryInitPredict() {
+        attempts++;
+        if (typeof window.initPredictPage === 'function') {
+            console.log('Calling window.initPredictPage() from page-init.js (attempt ' + attempts + ')');
+            window.initPredictPage();
+        } else if (attempts < maxAttempts) {
+            console.warn('window.initPredictPage() not found, retrying... (attempt ' + attempts + '/' + maxAttempts + ')');
+            setTimeout(tryInitPredict, 200);
+        } else {
+            console.error('window.initPredictPage() not found after ' + maxAttempts + ' attempts');
+            // Попробуем вызвать loadPredictions напрямую
+            if (typeof window.loadPredictions === 'function') {
+                console.log('Calling window.loadPredictions() directly as fallback');
+                window.loadPredictions(true);
+            } else {
+                console.error('window.loadPredictions() also not found!');
+            }
+        }
+    }
+    
+    setTimeout(tryInitPredict, 100);
+}
+
 // Auto-initialize based on current page
 document.addEventListener('DOMContentLoaded', () => {
     const currentPage = document.body.className;
@@ -184,6 +234,8 @@ document.addEventListener('DOMContentLoaded', () => {
         initProfilePage();
     } else if (currentPath === '/rules' || currentPage.includes('page-rules')) {
         initRulesPage();
+    } else if (currentPath === '/predict' || currentPage.includes('page-predict')) {
+        initPredictPageFromPageInit();
     }
     
     // Initialize jackpot carousel for non-home pages
