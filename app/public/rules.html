@@ -61,7 +61,7 @@
     <!-- Main Content -->
     <main class="main-content">
         <!-- Rules Page -->
-        <div id="rules-page" class="page" style="display: block;">
+        <div id="rules-page" class="page">
             <!-- Dynamic Menu -->
             <div class="dynamic-menu-container">
                 <div class="dynamic-menu-trigger"></div>
@@ -123,8 +123,8 @@
                                         <div class="last-subtitle">Prize pool:</div>
                                         <div class="last-amount" id="lastj-amount-rules">0 $TOKENS</div>
                                     </div>
-                                    <div class="last-winner-section" id="lastj-winner-rules" style="display: none;">
-                                        <div class="winner-wallet" style="color: #6E6BFF; font-size: 24px;">
+                                    <div class="last-winner-section" id="lastj-winner-rules">
+                                        <div class="winner-wallet">
                                             Wallet winner: <span id="lastj-winner-wallet-rules">-</span>
                                         </div>
                                     </div>
@@ -145,8 +145,11 @@
                         <h2 class="packs-title">RULES</h2>
                         <div class="rules-container" id="rules-content">
                             <div class="rules-card">
-                                <div class="rules-card-title">How to start</div>
-                                <ul class="rules-list">
+                                <div class="rules-card-title rules-card-header">
+                                    <span>How to start</span>
+                                    <span class="rules-card-toggle">▼</span>
+                                </div>
+                                <ul class="rules-list rules-card-content">
                                     <li>Connect your Solana wallet</li>
                                     <li>Buy $TOKENS and then you can buy packs</li>
                                     <li>Each card has its own rarity, and for every card you get a certain number of tickets. By purchasing a card, you earn the right to participate in the daily jackpot.</li>
@@ -154,8 +157,11 @@
                             </div>
 
                             <div class="rules-card">
-                                <div class="rules-card-title">How many tickets does each card give?</div>
-                                <ul class="rules-list">
+                                <div class="rules-card-title rules-card-header">
+                                    <span>How many tickets does each card give?</span>
+                                    <span class="rules-card-toggle">▼</span>
+                                </div>
+                                <ul class="rules-list rules-card-content">
                                     <li>Common: 10 tickets</li>
                                     <li>Rare: 25 tickets</li>
                                     <li>Epic: 60 tickets</li>
@@ -164,19 +170,119 @@
                             </div>
 
                             <div class="rules-card">
-                                <div class="rules-card-title">The distribution rule for coins from purchased packs</div>
-                                <ul class="rules-list">
-                                    <li>Burning: 25% goes to token burning</li>
-                                    <li>Referral rewards: 5% for regular users, 10% for inflows</li>
-                                    <li>Jackpot: 10% of tokens go to the daily jackpot, drawn every 24 hours</li>
-                                    <li>Super Jackpot: 5% goes to the super jackpot and is awarded to the first user who collects the entire card collection; after it is claimed once, it cannot be claimed again and the pool starts accumulating again</li>
-                                    <li>Developer fees: 5% goes to the developers</li>
-                                    <li>Pack-opening distribution: 40% is redistributed back through pack openings among users</li>
+                                <div class="rules-card-title rules-card-header">
+                                    <span>The distribution rule for coins from purchased packs</span>
+                                    <span class="rules-card-toggle">▼</span>
+                                </div>
+                                <ul class="rules-list rules-card-content">
+                                    <li><strong>Burning:</strong> 25% of tokens go to token burning. This reduces the total supply of tokens, making each remaining token more valuable.</li>
+                                    <li><strong>Referral rewards:</strong> 5% for regular users, 10% for inflows. When someone uses your referral code, you earn a percentage of their pack purchases.</li>
+                                    <li><strong>Jackpot:</strong> 10% of tokens go to the daily jackpot, which is drawn every 24 hours. Only cards from purchased packs count towards jackpot tickets. Bonus packs (from predictions, daily check-ins) do not contribute to the jackpot.</li>
+                                    <li><strong>Super Jackpot:</strong> 5% of tokens go to the super jackpot. It is awarded to the first user who collects the entire card collection. Once claimed, it cannot be claimed again, and the pool resets and starts accumulating for the next potential winner.</li>
+                                    <li><strong>Developer fees:</strong> 5% of tokens go to the developers to support the platform's maintenance and development.</li>
+                                    <li><strong>Pack-opening distribution:</strong> 40% of tokens are redistributed back through pack openings among users. This creates a circular economy where users can win tokens back by opening packs.</li>
+                                </ul>
+                            </div>
+
+                            <div class="rules-card">
+                                <div class="rules-card-title rules-card-header">
+                                    <span>Daily Jackpot Rules</span>
+                                    <span class="rules-card-toggle">▼</span>
+                                </div>
+                                <ul class="rules-list rules-card-content">
+                                    <li>The daily jackpot runs every 24 hours and resets automatically.</li>
+                                    <li>Your chance of winning is proportional to the number of tickets you have from purchased packs.</li>
+                                    <li>Only cards obtained from purchased packs count towards your tickets. Bonus packs do not contribute.</li>
+                                    <li>The winner receives 100% of the accumulated jackpot amount.</li>
+                                    <li>If no one has tickets, the jackpot rolls over to the next round.</li>
+                                    <li>Winners are selected randomly based on ticket distribution at the time of the draw.</li>
+                                </ul>
+                            </div>
+
+                            <div class="rules-card">
+                                <div class="rules-card-title rules-card-header">
+                                    <span>Super Jackpot Rules</span>
+                                    <span class="rules-card-toggle">▼</span>
+                                </div>
+                                <ul class="rules-list rules-card-content">
+                                    <li>To win the Super Jackpot, you must collect one of each card in the entire collection.</li>
+                                    <li>The Super Jackpot accumulates from 5% of all pack purchases.</li>
+                                    <li>Only the first user to complete the collection wins the current Super Jackpot.</li>
+                                    <li>After a Super Jackpot is claimed, the pool resets and starts accumulating again.</li>
+                                    <li>You can only win the Super Jackpot once per reset cycle.</li>
+                                    <li>The Super Jackpot is automatically awarded when you open a pack that completes your collection.</li>
+                                </ul>
+                            </div>
+
+                            <div class="rules-card">
+                                <div class="rules-card-title rules-card-header">
+                                    <span>Battle Rules</span>
+                                    <span class="rules-card-toggle">▼</span>
+                                </div>
+                                <ul class="rules-list rules-card-content">
+                                    <li>Battles allow you to compete with other players using your card collection.</li>
+                                    <li>Each battle requires specific cards or card combinations to participate.</li>
+                                    <li>Winners receive rewards based on the battle's prize pool.</li>
+                                    <li>Battles have entry requirements and time limits.</li>
+                                    <li>Your battle history and statistics are tracked in your profile.</li>
+                                </ul>
+                            </div>
+
+                            <div class="rules-card">
+                                <div class="rules-card-title rules-card-header">
+                                    <span>Prediction Rules</span>
+                                    <span class="rules-card-toggle">▼</span>
+                                </div>
+                                <ul class="rules-list rules-card-content">
+                                    <li>Make predictions on real-world events from Polymarket.</li>
+                                    <li>Each prediction has two possible outcomes (Yes/No, A/B).</li>
+                                    <li>You can place one bet per prediction.</li>
+                                    <li>If your prediction wins, you receive rewards based on probability distribution:
+                                        <ul class="rules-nested-list">
+                                            <li>40% chance: 3 Broken packs</li>
+                                            <li>25% chance: 1 Common pack</li>
+                                            <li>10% chance: 1 Legendary pack</li>
+                                            <li>20% chance: 1 Common or Rare card</li>
+                                            <li>5% chance: Personal legendary chance boost (+10% for 24 hours)</li>
+                                        </ul>
+                                    </li>
+                                    <li>Cards from prediction rewards do not count towards jackpot tickets.</li>
+                                    <li>Predictions are resolved when the event outcome is determined.</li>
+                                </ul>
+                            </div>
+
+                            <div class="rules-card">
+                                <div class="rules-card-title rules-card-header">
+                                    <span>Referral System Rules</span>
+                                    <span class="rules-card-toggle">▼</span>
+                                </div>
+                                <ul class="rules-list rules-card-content">
+                                    <li>Share your unique referral code to invite new players.</li>
+                                    <li>You earn 5% of tokens from pack purchases made by users you referred (regular referrals).</li>
+                                    <li>You earn 10% of tokens from pack purchases made by users who joined through your referral link (inflow referrals).</li>
+                                    <li>Referral rewards are automatically credited to your account.</li>
+                                    <li>There is no limit on the number of users you can refer.</li>
+                                    <li>Your referral code can be found in your profile section.</li>
+                                </ul>
+                            </div>
+
+                            <div class="rules-card">
+                                <div class="rules-card-title rules-card-header">
+                                    <span>Card Rarity and Pack Opening</span>
+                                    <span class="rules-card-toggle">▼</span>
+                                </div>
+                                <ul class="rules-list rules-card-content">
+                                    <li>Each pack contains one random card based on probability distribution.</li>
+                                    <li>There is a chance to get nothing (loss) when opening a pack.</li>
+                                    <li>Card rarities from most common to rarest: Common, Rare, Epic, Legendary.</li>
+                                    <li>Higher rarity cards give more tickets but are rarer to obtain.</li>
+                                    <li>You can view your collection and card statistics in the "My Collection" section.</li>
+                                    <li>Duplicate cards increase your ticket count for that specific card.</li>
                                 </ul>
                             </div>
                         </div>
                     </section>
-                    <div class="shop-footer" style="margin-top: 12vh;">
+                    <div class="shop-footer shop-footer-rules">
                         <div class="footer-title">EVERY PULL DRAINS YOUR HOPE. EVERY TICKET FUELS YOUR LUCK.</div>
                         <div class="footer-links">
 <!--                            <a href="https://t.me/tiredctoo" class="footer-link">Telegram</a>-->
@@ -190,6 +296,109 @@
 
     <script src="scripts/main.js"></script>
     <script src="scripts/dynamic-menu.js"></script>
+    <script>
+        // Collapsible rules functionality - простая рабочая версия
+        (function() {
+            function initRules() {
+                const headers = document.querySelectorAll('.rules-card-header');
+                console.log('Found headers:', headers.length);
+                
+                headers.forEach(function(header) {
+                    if (header.dataset.initialized === 'true') {
+                        return;
+                    }
+                    header.dataset.initialized = 'true';
+                    
+                    header.addEventListener('click', function(e) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        
+                        const content = this.nextElementSibling;
+                        if (!content) {
+                            console.error('Content not found!');
+                            return;
+                        }
+                        
+                        const toggle = this.querySelector('.rules-card-toggle');
+                        if (!toggle) {
+                            console.error('Toggle not found!');
+                            return;
+                        }
+                        
+                        const currentDisplay = window.getComputedStyle(content).display;
+                        const currentMaxHeight = parseFloat(window.getComputedStyle(content).maxHeight) || 0;
+                        const isExpanded = currentDisplay !== 'none' && currentMaxHeight > 10;
+                        
+                        console.log('=== CLICK ===');
+                        console.log('isExpanded:', isExpanded);
+                        console.log('currentDisplay:', currentDisplay);
+                        console.log('currentMaxHeight:', currentMaxHeight);
+                        console.log('content element:', content);
+                        console.log('content.innerHTML length:', content.innerHTML ? content.innerHTML.length : 0);
+                        console.log('content.textContent:', content.textContent ? content.textContent.substring(0, 100) : 'NO TEXT');
+                        
+                        if (isExpanded) {
+                            // Сворачиваем с анимацией
+                            content.style.maxHeight = '0';
+                            content.style.opacity = '0';
+                            content.style.marginTop = '0';
+                            toggle.textContent = '▼';
+                            this.classList.remove('expanded');
+                            
+                            setTimeout(() => {
+                                content.style.display = 'none';
+                            }, 500);
+                        } else {
+                            // Разворачиваем с анимацией
+                            console.log('=== EXPANDING ===');
+                            console.log('Content element:', content);
+                            console.log('Content tagName:', content.tagName);
+                            console.log('Content className:', content.className);
+                            console.log('Content innerHTML length:', content.innerHTML ? content.innerHTML.length : 0);
+                            console.log('Content textContent:', content.textContent ? content.textContent.substring(0, 150) : 'NO TEXT');
+                            console.log('Content children count:', content.children ? content.children.length : 0);
+                            
+                            // Шаг 1: Устанавливаем display и начальные значения
+                            content.style.display = 'block';
+                            content.style.maxHeight = '0';
+                            content.style.opacity = '0';
+                            content.style.marginTop = '0';
+                            content.style.visibility = 'visible';
+                            
+                            console.log('After setting initial styles - display:', window.getComputedStyle(content).display);
+                            
+                            // Шаг 2: Принудительный reflow
+                            void content.offsetHeight;
+                            
+                            // Шаг 3: Запускаем анимацию
+                            requestAnimationFrame(() => {
+                                content.style.maxHeight = '2000px';
+                                content.style.opacity = '1';
+                                content.style.marginTop = '12px';
+                                
+                                console.log('After animation - display:', window.getComputedStyle(content).display);
+                                console.log('After animation - maxHeight:', window.getComputedStyle(content).maxHeight);
+                                console.log('After animation - opacity:', window.getComputedStyle(content).opacity);
+                                console.log('After animation - visibility:', window.getComputedStyle(content).visibility);
+                            });
+                            
+                            toggle.textContent = '▲';
+                            this.classList.add('expanded');
+                        }
+                    });
+                });
+            }
+            
+            // Инициализация
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', initRules);
+            } else {
+                initRules();
+            }
+            
+            setTimeout(initRules, 500);
+        })();
+    </script>
     
     <script src="scripts/page-init.js"></script>
 

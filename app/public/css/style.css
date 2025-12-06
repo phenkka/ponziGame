@@ -726,9 +726,9 @@ body:not(.page-home) .page {
     font-size: 20px;
 }
 .checkin-input-section {
-    display: flex;
+    display: flex !important;
     flex-direction: column;
-    gap: 16px;
+    gap: 16px !important;
 }
 .checkin-input-wrapper {
     display: flex;
@@ -916,9 +916,65 @@ body:not(.page-home) .page {
     margin-bottom: 12px;
 }
 
+.rules-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    cursor: pointer;
+    user-select: none;
+    transition: opacity 0.2s ease;
+    margin-bottom: 0;
+    position: relative;
+    z-index: 1;
+    padding: 4px 0;
+}
+
+.rules-card-header:hover {
+    opacity: 0.8;
+}
+
+.rules-card-header span:first-child {
+    flex: 1;
+}
+
+.rules-card-toggle {
+    font-size: 16px;
+    color: #6E6BFF;
+    transition: transform 0.3s ease;
+    margin-left: 12px;
+    display: inline-block;
+    flex-shrink: 0;
+}
+
+.rules-card-header.expanded .rules-card-toggle {
+    transform: rotate(180deg);
+}
+
+.rules-card-content {
+    margin-top: 0;
+    display: none;
+    overflow: hidden;
+    max-height: 0;
+    opacity: 0;
+    visibility: hidden;
+    transition: max-height 0.5s cubic-bezier(0.4, 0, 0.2, 1), 
+                opacity 0.4s ease-in-out 0.1s,
+                margin-top 0.4s ease-in-out,
+                visibility 0s linear 0.5s;
+}
+
+.rules-card-content[style*="display: block"] {
+    visibility: visible;
+    transition: max-height 0.5s cubic-bezier(0.4, 0, 0.2, 1), 
+                opacity 0.4s ease-in-out 0.1s,
+                margin-top 0.4s ease-in-out,
+                visibility 0s linear 0s;
+}
+
 .rules-list { 
     list-style: none; 
-    padding-left: 0; 
+    padding-left: 0;
+    color: rgba(255, 255, 255, 0.95);
 }
 
 .rules-list li {
@@ -940,9 +996,64 @@ body:not(.page-home) .page {
     background: #6E6BFF;
 }
 
+.rules-list li strong {
+    color: #6E6BFF;
+    font-weight: 600;
+}
+
+.rules-list ul {
+    list-style: none;
+    padding-left: 0;
+    margin-top: 8px;
+}
+
+.rules-list ul li {
+    padding-left: 28px;
+    margin: 6px 0;
+    font-size: 0.95em;
+    opacity: 0.85;
+}
+
+.rules-list ul li::before {
+    content: '→';
+    position: absolute;
+    left: 12px;
+    top: 8px;
+    color: #6E6BFF;
+    font-weight: bold;
+    width: auto;
+    height: auto;
+    background: none;
+    border-radius: 0;
+}
+
+.rules-nested-list {
+    margin-left: 20px;
+    margin-top: 8px;
+}
+
+.last-winner-section {
+    display: none;
+}
+
+.winner-wallet {
+    color: #6E6BFF;
+    font-size: 24px;
+}
+
+.shop-footer-rules {
+    margin-top: 12vh;
+}
+
+#rules-page {
+    display: block;
+}
+
 @media (max-width: 768px) {
     .rules-container { margin: 0 2%; }
     .rules-card { padding: 18px; }
+    .rules-card-title { font-size: 18px; }
+    .rules-list li { font-size: 14px; }
 }
 
 .content-grid {

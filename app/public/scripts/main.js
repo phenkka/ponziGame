@@ -946,6 +946,9 @@ async function loadDailyCheckin() {
         checkinButton.disabled = true;
         checkinButton.textContent = 'ALREADY CHECKED IN';
         checkinButton.style.display = 'block';
+        // Убираем любые inline стили, которые могут влиять на отступы
+        checkinButton.style.marginTop = '';
+        checkinButton.style.marginBottom = '';
         if (checkinMessage) {
           checkinMessage.textContent = 'You have already checked in today!';
           checkinMessage.style.display = 'block';
@@ -953,9 +956,17 @@ async function loadDailyCheckin() {
         }
       } else {
         // Еще не зашел - показываем поле ввода
-        if (checkinInputSection) checkinInputSection.style.display = 'block';
+        if (checkinInputSection) {
+          checkinInputSection.style.display = 'flex';
+          // Убеждаемся, что gap сохраняется
+          checkinInputSection.style.gap = '24px';
+        }
         checkinButton.disabled = true; // Будет активирована при вводе кода
         checkinButton.textContent = 'CHECK IN';
+        // Убираем любые inline стили, которые могут влиять на отступы
+        checkinButton.style.marginTop = '';
+        checkinButton.style.marginBottom = '';
+        checkinButton.style.display = '';
         if (checkinInput) {
           checkinInput.value = '';
           checkinInput.disabled = false;
@@ -1042,6 +1053,9 @@ async function loadDailyCheckin() {
             }
             checkinButton.disabled = true;
             checkinButton.textContent = 'ALREADY CHECKED IN';
+            // Убираем любые inline стили, которые могут влиять на отступы
+            checkinButton.style.marginTop = '';
+            checkinButton.style.marginBottom = '';
             
             if (checkinMessage) {
               let message = `Checked in! Consecutive days: ${checkinData.consecutive_days}`;
@@ -1070,6 +1084,16 @@ async function loadDailyCheckin() {
           } else {
             checkinButton.disabled = false;
             checkinButton.textContent = 'CHECK IN';
+            // Восстанавливаем правильные стили для секции
+            const checkinInputSection = document.getElementById('checkin-input-section');
+            if (checkinInputSection) {
+              checkinInputSection.style.display = 'flex';
+              checkinInputSection.style.gap = '24px';
+            }
+            // Убираем любые inline стили с кнопки
+            checkinButton.style.marginTop = '';
+            checkinButton.style.marginBottom = '';
+            checkinButton.style.display = '';
             if (checkinInput) checkinInput.disabled = false;
             if (checkinMessage) {
               checkinMessage.textContent = checkinData.error || 'Invalid code. Please check the code from Twitter and try again.';
@@ -1086,6 +1110,16 @@ async function loadDailyCheckin() {
           console.error('Check-in error:', error);
           checkinButton.disabled = false;
           checkinButton.textContent = 'CHECK IN';
+          // Восстанавливаем правильные стили для секции
+          const checkinInputSection = document.getElementById('checkin-input-section');
+          if (checkinInputSection) {
+            checkinInputSection.style.display = 'flex';
+            checkinInputSection.style.gap = '24px';
+          }
+          // Убираем любые inline стили с кнопки
+          checkinButton.style.marginTop = '';
+          checkinButton.style.marginBottom = '';
+          checkinButton.style.display = '';
           if (checkinInput) checkinInput.disabled = false;
           if (checkinMessage) {
             checkinMessage.textContent = 'Error checking in. Please try again.';
