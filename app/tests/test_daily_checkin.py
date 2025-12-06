@@ -157,7 +157,7 @@ class TestDailyCheckinValidation:
             response = await client.post(
                 f"/api/daily-checkin/checkin/{wallet}",
                 headers={**auth_headers, "Content-Type": "application/json"},
-                json={"daily_code": "WRONG12"}
+                json={"daily_code": "WRONG123"}
             )
             assert response.status_code == 400
             data = response.json()
@@ -183,11 +183,11 @@ class TestDailyCheckinValidation:
         yesterday = today - timedelta(days=1)
         cursor.execute(
             "INSERT INTO Daily_codes (code_date, daily_code) VALUES (%s, %s) ON CONFLICT (code_date) DO UPDATE SET daily_code = EXCLUDED.daily_code",
-            (yesterday, "YESTER1")
+            (yesterday, "YESTER12")
         )
         cursor.execute(
             "INSERT INTO Daily_codes (code_date, daily_code) VALUES (%s, %s) ON CONFLICT (code_date) DO UPDATE SET daily_code = EXCLUDED.daily_code",
-            (today, "TODAY12")
+            (today, "TODAY123")
         )
         db_connection.commit()
         cursor.close()
@@ -197,7 +197,7 @@ class TestDailyCheckinValidation:
             response = await client.post(
                 f"/api/daily-checkin/checkin/{wallet}",
                 headers={**auth_headers, "Content-Type": "application/json"},
-                json={"daily_code": "YESTER1"}  # Вчерашний код
+                json={"daily_code": "YESTER12"}  # Вчерашний код
             )
             assert response.status_code == 400
             data = response.json()
@@ -304,18 +304,18 @@ class TestDailyCheckinConsecutiveDays:
         yesterday = today - timedelta(days=1)
         cursor.execute(
             "INSERT INTO Daily_codes (code_date, daily_code) VALUES (%s, %s) ON CONFLICT (code_date) DO UPDATE SET daily_code = EXCLUDED.daily_code",
-            (yesterday, "YESTER1")
+            (yesterday, "YESTER12")
         )
         cursor.execute(
             "INSERT INTO Daily_codes (code_date, daily_code) VALUES (%s, %s) ON CONFLICT (code_date) DO UPDATE SET daily_code = EXCLUDED.daily_code",
-            (today, "TODAY12")
+            (today, "TODAY123")
         )
         
         # Создаем чекин на вчера
         cursor.execute("""
             INSERT INTO Daily_checkins (id_user, checkin_date, daily_code, consecutive_days)
             VALUES (%s, %s, %s, %s)
-        """, (user_id, yesterday, "YESTER1", 1))
+        """, (user_id, yesterday, "YESTER12", 1))
         db_connection.commit()
         cursor.close()
         
@@ -324,7 +324,7 @@ class TestDailyCheckinConsecutiveDays:
             response = await client.post(
                 f"/api/daily-checkin/checkin/{wallet}",
                 headers={**auth_headers, "Content-Type": "application/json"},
-                json={"daily_code": "TODAY12"}
+                json={"daily_code": "TODAY123"}
             )
             assert response.status_code == 200
             data = response.json()
@@ -351,18 +351,18 @@ class TestDailyCheckinConsecutiveDays:
         two_days_ago = today - timedelta(days=2)
         cursor.execute(
             "INSERT INTO Daily_codes (code_date, daily_code) VALUES (%s, %s) ON CONFLICT (code_date) DO UPDATE SET daily_code = EXCLUDED.daily_code",
-            (two_days_ago, "TWOAGO1")
+            (two_days_ago, "TWOAGO12")
         )
         cursor.execute(
             "INSERT INTO Daily_codes (code_date, daily_code) VALUES (%s, %s) ON CONFLICT (code_date) DO UPDATE SET daily_code = EXCLUDED.daily_code",
-            (today, "TODAY12")
+            (today, "TODAY123")
         )
         
         # Создаем чекин 2 дня назад (consecutive_days = 2)
         cursor.execute("""
             INSERT INTO Daily_checkins (id_user, checkin_date, daily_code, consecutive_days)
             VALUES (%s, %s, %s, %s)
-        """, (user_id, two_days_ago, "TWOAGO1", 2))
+        """, (user_id, two_days_ago, "TWOAGO12", 2))
         db_connection.commit()
         cursor.close()
         
@@ -371,7 +371,7 @@ class TestDailyCheckinConsecutiveDays:
             response = await client.post(
                 f"/api/daily-checkin/checkin/{wallet}",
                 headers={**auth_headers, "Content-Type": "application/json"},
-                json={"daily_code": "TODAY12"}
+                json={"daily_code": "TODAY123"}
             )
             assert response.status_code == 200
             data = response.json()
@@ -400,26 +400,26 @@ class TestDailyCheckinConsecutiveDays:
         
         cursor.execute(
             "INSERT INTO Daily_codes (code_date, daily_code) VALUES (%s, %s) ON CONFLICT (code_date) DO UPDATE SET daily_code = EXCLUDED.daily_code",
-            (two_days_ago, "TWOAGO1")
+            (two_days_ago, "TWOAGO12")
         )
         cursor.execute(
             "INSERT INTO Daily_codes (code_date, daily_code) VALUES (%s, %s) ON CONFLICT (code_date) DO UPDATE SET daily_code = EXCLUDED.daily_code",
-            (yesterday, "YESTER1")
+            (yesterday, "YESTER12")
         )
         cursor.execute(
             "INSERT INTO Daily_codes (code_date, daily_code) VALUES (%s, %s) ON CONFLICT (code_date) DO UPDATE SET daily_code = EXCLUDED.daily_code",
-            (today, "TODAY12")
+            (today, "TODAY123")
         )
         
         # Создаем чекины на 2 дня назад и вчера
         cursor.execute("""
             INSERT INTO Daily_checkins (id_user, checkin_date, daily_code, consecutive_days)
             VALUES (%s, %s, %s, %s)
-        """, (user_id, two_days_ago, "TWOAGO1", 1))
+        """, (user_id, two_days_ago, "TWOAGO12", 1))
         cursor.execute("""
             INSERT INTO Daily_checkins (id_user, checkin_date, daily_code, consecutive_days)
             VALUES (%s, %s, %s, %s)
-        """, (user_id, yesterday, "YESTER1", 2))
+        """, (user_id, yesterday, "YESTER12", 2))
         db_connection.commit()
         cursor.close()
         
@@ -428,7 +428,7 @@ class TestDailyCheckinConsecutiveDays:
             response = await client.post(
                 f"/api/daily-checkin/checkin/{wallet}",
                 headers={**auth_headers, "Content-Type": "application/json"},
-                json={"daily_code": "TODAY12"}
+                json={"daily_code": "TODAY123"}
             )
             assert response.status_code == 200
             data = response.json()
@@ -461,26 +461,26 @@ class TestDailyCheckinRewards:
         
         cursor.execute(
             "INSERT INTO Daily_codes (code_date, daily_code) VALUES (%s, %s) ON CONFLICT (code_date) DO UPDATE SET daily_code = EXCLUDED.daily_code",
-            (two_days_ago, "TWOAGO1")
+            (two_days_ago, "TWOAGO12")
         )
         cursor.execute(
             "INSERT INTO Daily_codes (code_date, daily_code) VALUES (%s, %s) ON CONFLICT (code_date) DO UPDATE SET daily_code = EXCLUDED.daily_code",
-            (yesterday, "YESTER1")
+            (yesterday, "YESTER12")
         )
         cursor.execute(
             "INSERT INTO Daily_codes (code_date, daily_code) VALUES (%s, %s) ON CONFLICT (code_date) DO UPDATE SET daily_code = EXCLUDED.daily_code",
-            (today, "TODAY12")
+            (today, "TODAY123")
         )
         
         # Создаем чекины
         cursor.execute("""
             INSERT INTO Daily_checkins (id_user, checkin_date, daily_code, consecutive_days)
             VALUES (%s, %s, %s, %s)
-        """, (user_id, two_days_ago, "TWOAGO1", 1))
+        """, (user_id, two_days_ago, "TWOAGO12", 1))
         cursor.execute("""
             INSERT INTO Daily_checkins (id_user, checkin_date, daily_code, consecutive_days)
             VALUES (%s, %s, %s, %s)
-        """, (user_id, yesterday, "YESTER1", 2))
+        """, (user_id, yesterday, "YESTER12", 2))
         
         # Убеждаемся, что есть broken пак (id_chest = 5)
         cursor.execute("SELECT id_chest FROM Chests WHERE id_chest = 5")
@@ -501,7 +501,7 @@ class TestDailyCheckinRewards:
                 response = await client.post(
                     f"/api/daily-checkin/checkin/{wallet}",
                     headers={**auth_headers, "Content-Type": "application/json"},
-                    json={"daily_code": "TODAY12"}
+                    json={"daily_code": "TODAY123"}
                 )
                 assert response.status_code == 200
                 data = response.json()
@@ -554,26 +554,26 @@ class TestDailyCheckinRewards:
         
         cursor.execute(
             "INSERT INTO Daily_codes (code_date, daily_code) VALUES (%s, %s) ON CONFLICT (code_date) DO UPDATE SET daily_code = EXCLUDED.daily_code",
-            (two_days_ago, "TWOAGO1")
+            (two_days_ago, "TWOAGO12")
         )
         cursor.execute(
             "INSERT INTO Daily_codes (code_date, daily_code) VALUES (%s, %s) ON CONFLICT (code_date) DO UPDATE SET daily_code = EXCLUDED.daily_code",
-            (yesterday, "YESTER1")
+            (yesterday, "YESTER12")
         )
         cursor.execute(
             "INSERT INTO Daily_codes (code_date, daily_code) VALUES (%s, %s) ON CONFLICT (code_date) DO UPDATE SET daily_code = EXCLUDED.daily_code",
-            (today, "TODAY12")
+            (today, "TODAY123")
         )
         
         # Создаем чекины
         cursor.execute("""
             INSERT INTO Daily_checkins (id_user, checkin_date, daily_code, consecutive_days)
             VALUES (%s, %s, %s, %s)
-        """, (user_id, two_days_ago, "TWOAGO1", 1))
+        """, (user_id, two_days_ago, "TWOAGO12", 1))
         cursor.execute("""
             INSERT INTO Daily_checkins (id_user, checkin_date, daily_code, consecutive_days)
             VALUES (%s, %s, %s, %s)
-        """, (user_id, yesterday, "YESTER1", 2))
+        """, (user_id, yesterday, "YESTER12", 2))
         db_connection.commit()
         cursor.close()
         
@@ -584,7 +584,7 @@ class TestDailyCheckinRewards:
                 response = await client.post(
                     f"/api/daily-checkin/checkin/{wallet}",
                     headers={**auth_headers, "Content-Type": "application/json"},
-                    json={"daily_code": "TODAY12"}
+                    json={"daily_code": "TODAY123"}
                 )
                 assert response.status_code == 200
                 data = response.json()
@@ -636,7 +636,7 @@ class TestDailyCheckinBoost:
         today = get_utc_date()
         cursor.execute(
             "INSERT INTO Daily_codes (code_date, daily_code) VALUES (%s, %s) ON CONFLICT (code_date) DO UPDATE SET daily_code = EXCLUDED.daily_code",
-            (today, "TODAY12")
+            (today, "TODAY123")
         )
         db_connection.commit()
         cursor.close()
@@ -679,7 +679,7 @@ class TestDailyCheckinBoost:
         today = get_utc_date()
         cursor.execute(
             "INSERT INTO Daily_codes (code_date, daily_code) VALUES (%s, %s) ON CONFLICT (code_date) DO UPDATE SET daily_code = EXCLUDED.daily_code",
-            (today, "TODAY12")
+            (today, "TODAY123")
         )
         db_connection.commit()
         cursor.close()
@@ -750,3 +750,358 @@ class TestDailyCheckinCodeGeneration:
             assert code_from_db is not None, f"Could not extract code from result: {result}"
             assert code_from_db == data["today_code"], f"Code mismatch: DB has {code_from_db}, API returned {data['today_code']}"
             cursor.close()
+
+
+class TestDailyCheckinInputValidation:
+    """Тесты для валидации входных данных (защита от спецсимволов, неверной длины и т.д.)"""
+    
+    @pytest.mark.asyncio
+    async def test_checkin_with_special_characters(self, clean_db, db_connection, auth_headers):
+        """Тест: код со спецсимволами должен быть отклонен"""
+        if db_connection is None:
+            pytest.skip("Database not available")
+        
+        wallet = auth_headers["X-Wallet"]
+        cursor = db_connection.cursor()
+        cursor.execute(
+            "INSERT INTO Users (wallet, ref_code) VALUES (%s, %s) RETURNING id_user",
+            (wallet, "TESTCODE")
+        )
+        db_connection.commit()
+        cursor.close()
+        
+        # Тестируем различные спецсимволы
+        invalid_codes = [
+            "CODE@123",  # @
+            "CODE#123",  # #
+            "CODE$123",  # $
+            "CODE%123",  # %
+            "CODE!123",  # !
+            "CODE-123",  # дефис
+            "CODE_123",  # подчеркивание
+            "CODE.123",  # точка
+            "CODE 123",  # пробел
+            "CODE\n123", # перенос строки
+            "CODE\t123", # табуляция
+            "CODE+123",  # плюс
+            "CODE=123",  # равно
+            "CODE(123",  # скобка
+            "CODE)123",  # скобка
+            "CODE[123",  # скобка
+            "CODE]123",  # скобка
+            "CODE{123",  # скобка
+            "CODE}123",  # скобка
+            "CODE|123",  # вертикальная черта
+            "CODE\\123", # обратный слэш
+            "CODE/123",  # слэш
+            "CODE*123",  # звездочка
+            "CODE?123",  # вопрос
+            "CODE&123",  # амперсанд
+            "CODE<123",  # меньше
+            "CODE>123",  # больше
+            "CODE,123",  # запятая
+            "CODE;123",  # точка с запятой
+            "CODE:123",  # двоеточие
+            "CODE'123",  # одинарная кавычка
+            'CODE"123',  # двойная кавычка
+        ]
+        
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            for invalid_code in invalid_codes:
+                response = await client.post(
+                    f"/api/daily-checkin/checkin/{wallet}",
+                    headers={**auth_headers, "Content-Type": "application/json"},
+                    json={"daily_code": invalid_code}
+                )
+                assert response.status_code == 400, f"Code '{invalid_code}' should be rejected"
+                data = response.json()
+                assert data["success"] is False
+                assert "special characters" in data["error"].lower() or "must contain only" in data["error"].lower(), \
+                    f"Expected error about special characters for '{invalid_code}', got: {data['error']}"
+    
+    @pytest.mark.asyncio
+    async def test_checkin_with_wrong_length(self, clean_db, db_connection, auth_headers):
+        """Тест: код неправильной длины должен быть отклонен"""
+        if db_connection is None:
+            pytest.skip("Database not available")
+        
+        wallet = auth_headers["X-Wallet"]
+        cursor = db_connection.cursor()
+        cursor.execute(
+            "INSERT INTO Users (wallet, ref_code) VALUES (%s, %s) RETURNING id_user",
+            (wallet, "TESTCODE")
+        )
+        db_connection.commit()
+        cursor.close()
+        
+        # Тестируем различные длины (исключаем пустую строку - она проверяется отдельным тестом)
+        invalid_codes = [
+            ("A", 1),          # 1 символ
+            ("AB", 2),         # 2 символа
+            ("ABC", 3),        # 3 символа
+            ("ABCD", 4),       # 4 символа
+            ("ABCDE", 5),      # 5 символов
+            ("ABCDEF", 6),     # 6 символов
+            ("ABCDEFG", 7),    # 7 символов
+            ("ABCDEFGHI", 9),  # 9 символов
+            ("ABCDEFGHIJ", 10), # 10 символов
+            ("ABCDEFGHIJKLMNOP", 16), # 16 символов
+        ]
+        
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            for invalid_code, length in invalid_codes:
+                response = await client.post(
+                    f"/api/daily-checkin/checkin/{wallet}",
+                    headers={**auth_headers, "Content-Type": "application/json"},
+                    json={"daily_code": invalid_code}
+                )
+                assert response.status_code == 400, f"Code '{invalid_code}' (length {length}) should be rejected"
+                data = response.json()
+                assert data["success"] is False
+                assert "8 characters" in data["error"].lower() or "exactly 8" in data["error"].lower(), \
+                    f"Expected error about length for '{invalid_code}' (length {length}), got: {data['error']}"
+    
+    @pytest.mark.asyncio
+    async def test_checkin_with_lowercase_letters(self, clean_db, db_connection, auth_headers):
+        """Тест: код с маленькими буквами должен быть автоматически конвертирован в большие и пройти валидацию"""
+        if db_connection is None:
+            pytest.skip("Database not available")
+        
+        wallet = auth_headers["X-Wallet"]
+        cursor = db_connection.cursor()
+        cursor.execute(
+            "INSERT INTO Users (wallet, ref_code) VALUES (%s, %s) RETURNING id_user",
+            (wallet, "TESTCODE")
+        )
+        
+        # Создаем код на сегодня
+        today = get_utc_date()
+        cursor.execute(
+            "INSERT INTO Daily_codes (code_date, daily_code) VALUES (%s, %s) ON CONFLICT (code_date) DO UPDATE SET daily_code = EXCLUDED.daily_code",
+            (today, "CODE1234")
+        )
+        db_connection.commit()
+        cursor.close()
+        
+        # Тестируем коды с маленькими буквами (должны быть конвертированы в большие)
+        lowercase_codes = [
+            "code1234",   # все маленькие -> CODE1234
+            "CODEa234",   # одна маленькая -> CODEA234
+            "CODE1a34",   # одна маленькая в середине -> CODE1A34
+            "codeCODE",   # смешанный регистр -> CODECODE
+            "AbCdEfGh",   # чередование -> ABCDEFGH
+        ]
+        
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            for lowercase_code in lowercase_codes:
+                response = await client.post(
+                    f"/api/daily-checkin/checkin/{wallet}",
+                    headers={**auth_headers, "Content-Type": "application/json"},
+                    json={"daily_code": lowercase_code}
+                )
+                # Код должен пройти валидацию формата (не 400 из-за формата)
+                # Но может быть 400 из-за неверного кода (Invalid code)
+                assert response.status_code in [200, 400], f"Code '{lowercase_code}' should pass format validation"
+                data = response.json()
+                if response.status_code == 400:
+                    # Если 400, то ошибка должна быть о неверном коде, а не о формате
+                    assert "Invalid code" in data["error"] or "Invalid daily code" in data["error"] or "already checked in" in data["error"].lower(), \
+                        f"Expected 'Invalid code' error for '{lowercase_code}', got: {data['error']}"
+                    assert "8 characters" not in data["error"].lower() and "special characters" not in data["error"].lower() and "must contain only" not in data["error"].lower(), \
+                        f"Should not be format error for '{lowercase_code}', got: {data['error']}"
+    
+    @pytest.mark.asyncio
+    async def test_checkin_with_valid_format(self, clean_db, db_connection, auth_headers):
+        """Тест: код правильного формата должен пройти валидацию (но может быть неверным по содержимому)"""
+        if db_connection is None:
+            pytest.skip("Database not available")
+        
+        wallet = auth_headers["X-Wallet"]
+        cursor = db_connection.cursor()
+        cursor.execute(
+            "INSERT INTO Users (wallet, ref_code) VALUES (%s, %s) RETURNING id_user",
+            (wallet, "TESTCODE")
+        )
+        db_connection.commit()
+        cursor.close()
+        
+        # Валидные форматы (8 символов, только A-Z и 0-9)
+        valid_formats = [
+            "ABCD1234",   # буквы и цифры
+            "12345678",   # только цифры
+            "ABCDEFGH",   # только буквы
+            "A1B2C3D4",   # чередование
+            "00000000",   # все нули
+            "ZZZZZZZZ",   # все Z
+        ]
+        
+        # Создаем код на сегодня
+        today = get_utc_date()
+        cursor = db_connection.cursor()
+        cursor.execute(
+            "INSERT INTO Daily_codes (code_date, daily_code) VALUES (%s, %s) ON CONFLICT (code_date) DO UPDATE SET daily_code = EXCLUDED.daily_code",
+            (today, "VALID12")
+        )
+        db_connection.commit()
+        cursor.close()
+        
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            for valid_format in valid_formats:
+                response = await client.post(
+                    f"/api/daily-checkin/checkin/{wallet}",
+                    headers={**auth_headers, "Content-Type": "application/json"},
+                    json={"daily_code": valid_format}
+                )
+                # Код должен пройти валидацию формата (не 400 из-за формата)
+                # Но может быть 400 из-за неверного кода (Invalid code)
+                assert response.status_code in [200, 400], f"Code '{valid_format}' should pass format validation"
+                data = response.json()
+                if response.status_code == 400:
+                    # Если 400, то ошибка должна быть о неверном коде, а не о формате
+                    assert "Invalid code" in data["error"] or "Invalid daily code" in data["error"] or "already checked in" in data["error"].lower(), \
+                        f"Expected 'Invalid code' error for '{valid_format}', got: {data['error']}"
+                    assert "8 characters" not in data["error"].lower() and "special characters" not in data["error"].lower(), \
+                        f"Should not be format error for '{valid_format}', got: {data['error']}"
+    
+    @pytest.mark.asyncio
+    async def test_checkin_with_whitespace(self, clean_db, db_connection, auth_headers):
+        """Тест: код с пробелами должен быть отклонен или обработан (пробелы удаляются)"""
+        if db_connection is None:
+            pytest.skip("Database not available")
+        
+        wallet = auth_headers["X-Wallet"]
+        cursor = db_connection.cursor()
+        cursor.execute(
+            "INSERT INTO Users (wallet, ref_code) VALUES (%s, %s) RETURNING id_user",
+            (wallet, "TESTCODE")
+        )
+        db_connection.commit()
+        cursor.close()
+        
+        # Коды с пробелами
+        codes_with_spaces = [
+            "CODE 123",   # пробел в середине
+            " CODE123",   # пробел в начале
+            "CODE123 ",   # пробел в конце
+            "CODE 1 23",  # несколько пробелов
+            "  CODE123  ", # пробелы с обеих сторон
+        ]
+        
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            for code_with_space in codes_with_spaces:
+                response = await client.post(
+                    f"/api/daily-checkin/checkin/{wallet}",
+                    headers={**auth_headers, "Content-Type": "application/json"},
+                    json={"daily_code": code_with_space}
+                )
+                # Пробелы должны быть отклонены как спецсимволы или удалены (тогда будет ошибка длины)
+                assert response.status_code == 400, f"Code '{code_with_space}' should be rejected"
+                data = response.json()
+                assert data["success"] is False
+                # Может быть ошибка о спецсимволах или о длине (если пробелы удаляются)
+                assert "special characters" in data["error"].lower() or "8 characters" in data["error"].lower() or "must contain only" in data["error"].lower(), \
+                    f"Expected validation error for '{code_with_space}', got: {data['error']}"
+    
+    @pytest.mark.asyncio
+    async def test_checkin_with_non_string_type(self, clean_db, db_connection, auth_headers):
+        """Тест: код не-строкового типа должен быть отклонен"""
+        if db_connection is None:
+            pytest.skip("Database not available")
+        
+        wallet = auth_headers["X-Wallet"]
+        cursor = db_connection.cursor()
+        cursor.execute(
+            "INSERT INTO Users (wallet, ref_code) VALUES (%s, %s) RETURNING id_user",
+            (wallet, "TESTCODE")
+        )
+        db_connection.commit()
+        cursor.close()
+        
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            # Тестируем различные не-строковые типы
+            invalid_payloads = [
+                {"daily_code": 12345678},      # число
+                {"daily_code": None},           # None
+                {"daily_code": True},           # boolean
+                {"daily_code": ["CODE1234"]},   # список
+                {"daily_code": {"code": "CODE1234"}}, # словарь
+            ]
+            
+            for payload in invalid_payloads:
+                response = await client.post(
+                    f"/api/daily-checkin/checkin/{wallet}",
+                    headers={**auth_headers, "Content-Type": "application/json"},
+                    json=payload
+                )
+                assert response.status_code == 400, f"Payload {payload} should be rejected"
+                data = response.json()
+                assert data["success"] is False
+                assert "string" in data["error"].lower() or "required" in data["error"].lower(), \
+                    f"Expected error about string type for {payload}, got: {data['error']}"
+    
+    @pytest.mark.asyncio
+    async def test_checkin_with_empty_string(self, clean_db, db_connection, auth_headers):
+        """Тест: пустая строка должна быть отклонена"""
+        if db_connection is None:
+            pytest.skip("Database not available")
+        
+        wallet = auth_headers["X-Wallet"]
+        cursor = db_connection.cursor()
+        cursor.execute(
+            "INSERT INTO Users (wallet, ref_code) VALUES (%s, %s) RETURNING id_user",
+            (wallet, "TESTCODE")
+        )
+        db_connection.commit()
+        cursor.close()
+        
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            response = await client.post(
+                f"/api/daily-checkin/checkin/{wallet}",
+                headers={**auth_headers, "Content-Type": "application/json"},
+                json={"daily_code": ""}
+            )
+            assert response.status_code == 400
+            data = response.json()
+            assert data["success"] is False
+            # Пустая строка может дать либо "required", либо "8 characters" - оба варианта валидны
+            assert "8 characters" in data["error"].lower() or "required" in data["error"].lower() or "daily_code is required" in data["error"], \
+                f"Expected error about length or required for empty string, got: {data['error']}"
+    
+    @pytest.mark.asyncio
+    async def test_checkin_with_unicode_characters(self, clean_db, db_connection, auth_headers):
+        """Тест: код с unicode символами должен быть отклонен"""
+        if db_connection is None:
+            pytest.skip("Database not available")
+        
+        wallet = auth_headers["X-Wallet"]
+        cursor = db_connection.cursor()
+        cursor.execute(
+            "INSERT INTO Users (wallet, ref_code) VALUES (%s, %s) RETURNING id_user",
+            (wallet, "TESTCODE")
+        )
+        db_connection.commit()
+        cursor.close()
+        
+        # Unicode символы
+        unicode_codes = [
+            "CODE123А",   # кириллица
+            "CODE123é",   # акцент
+            "CODE123ñ",   # испанский
+            "CODE123中",   # китайский
+            "CODE123日",   # японский
+            "CODE123ע",   # иврит
+            "CODE123α",   # греческий
+        ]
+        
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            for unicode_code in unicode_codes:
+                response = await client.post(
+                    f"/api/daily-checkin/checkin/{wallet}",
+                    headers={**auth_headers, "Content-Type": "application/json"},
+                    json={"daily_code": unicode_code}
+                )
+                assert response.status_code == 400, f"Unicode code '{unicode_code}' should be rejected"
+                data = response.json()
+                assert data["success"] is False
+                assert "must contain only" in data["error"].lower() or "special characters" in data["error"].lower() or "uppercase" in data["error"].lower(), \
+                    f"Expected validation error for unicode '{unicode_code}', got: {data['error']}"

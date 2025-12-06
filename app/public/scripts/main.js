@@ -976,13 +976,42 @@ async function loadDailyCheckin() {
           checkinMessage.style.display = 'none';
         }
         
-        // Активируем кнопку при вводе кода
+        // Активируем кнопку при вводе кода с валидацией
         checkinInput.oninput = () => {
-          const code = checkinInput.value.trim().toUpperCase();
+          // Фильтруем: оставляем только буквы A-Z и цифры 0-9
+          let code = checkinInput.value.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+          
+          // Ограничиваем длину до 8 символов
+          if (code.length > 8) {
+            code = code.substring(0, 8);
+          }
+          
+          // Обновляем значение поля (убираем спецсимволы)
+          if (checkinInput.value !== code) {
+            checkinInput.value = code;
+          }
+          
+          // Активируем кнопку только если код ровно 8 символов
           checkinButton.disabled = code.length !== 8;
+          
           if (checkinMessage && checkinMessage.style.display !== 'none') {
             checkinMessage.style.display = 'none';
           }
+        };
+        
+        // Дополнительная валидация при вставке (paste)
+        checkinInput.onpaste = (e) => {
+          e.preventDefault();
+          const pastedText = (e.clipboardData || window.clipboardData).getData('text');
+          // Фильтруем и ограничиваем длину
+          let code = pastedText.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+          if (code.length > 8) {
+            code = code.substring(0, 8);
+          }
+          checkinInput.value = code;
+          checkinButton.disabled = code.length !== 8;
+          // Триггерим событие input для обновления UI
+          checkinInput.dispatchEvent(new Event('input'));
         };
         
         // Обработка Enter

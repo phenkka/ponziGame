@@ -977,6 +977,22 @@ def process_daily_checkin(cursor, conn, user_id: int, daily_code: str) -> dict:
     from datetime import timedelta, datetime, date
     import json
     import random
+    import re
+    
+    # Валидация входного кода
+    if not daily_code or not isinstance(daily_code, str):
+        return {"success": False, "error": "Daily code is required and must be a string"}
+    
+    # Убираем пробелы и приводим к верхнему регистру
+    daily_code = daily_code.strip().upper()
+    
+    # Проверка длины
+    if len(daily_code) != 8:
+        return {"success": False, "error": "Daily code must be exactly 8 characters long"}
+    
+    # Проверка формата: только буквы A-Z и цифры 0-9, без спецсимволов
+    if not re.match(r'^[A-Z0-9]{8}$', daily_code):
+        return {"success": False, "error": "Daily code must contain only uppercase letters (A-Z) and digits (0-9), no special characters allowed"}
     
     today = get_utc_date()
     yesterday = today - timedelta(days=1)
@@ -993,8 +1009,8 @@ def process_daily_checkin(cursor, conn, user_id: int, daily_code: str) -> dict:
     else:
         expected_code = code_result['daily_code']
     
-    # Нормализуем оба кода к верхнему регистру для сравнения
-    daily_code_upper = daily_code.strip().upper()
+    # Код уже нормализован выше (strip().upper()), просто используем его
+    daily_code_upper = daily_code
     expected_code_upper = expected_code.strip().upper()
     
     if daily_code_upper != expected_code_upper:

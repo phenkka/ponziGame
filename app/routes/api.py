@@ -1413,6 +1413,31 @@ def setup_api_routes(app):
                     content={"success": False, "error": "daily_code is required"}
                 )
             
+            # Базовая валидация на уровне API (дополнительная проверка перед вызовом process_daily_checkin)
+            if not isinstance(daily_code, str):
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "error": "daily_code must be a string"}
+                )
+            
+            # Нормализуем код (убираем пробелы, приводим к верхнему регистру)
+            daily_code_normalized = daily_code.strip().upper()
+            
+            # Проверка длины
+            if len(daily_code_normalized) != 8:
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "error": "Daily code must be exactly 8 characters long"}
+                )
+            
+            # Проверка формата (только A-Z и 0-9, без спецсимволов)
+            import re
+            if not re.match(r'^[A-Z0-9]{8}$', daily_code_normalized):
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "error": "Daily code must contain only uppercase letters (A-Z) and digits (0-9), no special characters allowed"}
+                )
+            
             conn = get_db_connection()
             cursor = conn.cursor(cursor_factory=RealDictCursor)
             
