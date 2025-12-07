@@ -937,7 +937,34 @@ async function loadDailyCheckin() {
     const checkinInput = document.getElementById('checkin-code-input');
     const checkinInputSection = document.getElementById('checkin-input-section');
     
-    if (consecutiveDaysEl) consecutiveDaysEl.textContent = String(d.consecutive_days || 0);
+    // Обновляем отображение прогресса в формате "X / 3 days"
+    if (consecutiveDaysEl) {
+      const days = d.consecutive_days || 0;
+      consecutiveDaysEl.textContent = `${days} / 3 days`;
+    }
+    
+    // Показываем сообщение о прогрессе
+    const progressMessageEl = document.getElementById('checkin-progress-message');
+    const progressTextEl = progressMessageEl ? progressMessageEl.querySelector('.checkin-progress-text') : null;
+    if (progressMessageEl && progressTextEl) {
+      const days = d.consecutive_days || 0;
+      if (days > 0 && days < 3) {
+        const daysLeft = 3 - days;
+        progressTextEl.textContent = `Keep going! ${daysLeft} more day${daysLeft > 1 ? 's' : ''} until reward!`;
+        progressTextEl.style.color = '#FFC107';
+        progressMessageEl.style.display = 'block';
+        progressMessageEl.style.background = 'rgba(255, 193, 7, 0.1)';
+        progressMessageEl.style.borderColor = 'rgba(255, 193, 7, 0.3)';
+      } else if (days >= 3) {
+        progressTextEl.textContent = '🎉 Reward unlocked! Check in to claim your prize!';
+        progressTextEl.style.color = '#4CAF50';
+        progressMessageEl.style.display = 'block';
+        progressMessageEl.style.background = 'rgba(76, 175, 80, 0.1)';
+        progressMessageEl.style.borderColor = 'rgba(76, 175, 80, 0.3)';
+      } else {
+        progressMessageEl.style.display = 'none';
+      }
+    }
     
     if (checkinButton && checkinInput) {
       if (d.checked_in_today) {
@@ -1072,7 +1099,31 @@ async function loadDailyCheckin() {
             // Обновляем UI сразу на основе ответа от сервера
             const consecutiveDaysEl = document.getElementById('consecutive-days');
             if (consecutiveDaysEl) {
-              consecutiveDaysEl.textContent = String(checkinData.consecutive_days || 0);
+              const days = checkinData.consecutive_days || 0;
+              consecutiveDaysEl.textContent = `${days} / 3 days`;
+            }
+            
+            // Обновляем сообщение о прогрессе
+            const progressMessageEl = document.getElementById('checkin-progress-message');
+            const progressTextEl = progressMessageEl ? progressMessageEl.querySelector('.checkin-progress-text') : null;
+            if (progressMessageEl && progressTextEl) {
+              const days = checkinData.consecutive_days || 0;
+              if (days > 0 && days < 3) {
+                const daysLeft = 3 - days;
+                progressTextEl.textContent = `Keep going! ${daysLeft} more day${daysLeft > 1 ? 's' : ''} until reward!`;
+                progressTextEl.style.color = '#FFC107';
+                progressMessageEl.style.display = 'block';
+                progressMessageEl.style.background = 'rgba(255, 193, 7, 0.1)';
+                progressMessageEl.style.borderColor = 'rgba(255, 193, 7, 0.3)';
+              } else if (days >= 3) {
+                progressTextEl.textContent = '🎉 Reward unlocked! Check in to claim your prize!';
+                progressTextEl.style.color = '#4CAF50';
+                progressMessageEl.style.display = 'block';
+                progressMessageEl.style.background = 'rgba(76, 175, 80, 0.1)';
+                progressMessageEl.style.borderColor = 'rgba(76, 175, 80, 0.3)';
+              } else {
+                progressMessageEl.style.display = 'none';
+              }
             }
             
             // Скрываем поле ввода, показываем статус

@@ -256,6 +256,123 @@ class TestPolymarketSyncDatabase:
         assert status == "active"
         cursor.close()
     
+    def test_mark_resolved_predictions_issues_rewards(self, clean_db, db_connection):
+        """Тест: автоматическая выдача наград при разрешении пари через mark_resolved_predictions"""
+        if db_connection is None:
+            pytest.skip("Database not available")
+        
+        cursor = db_connection.cursor(cursor_factory=RealDictCursor)
+        
+        # Создаем пользователя
+        from nacl.signing import SigningKey
+        import base58
+        signing_key = SigningKey.generate()
+        verify_key = signing_key.verify_key
+        wallet = base58.b58encode(verify_key.encode()).decode('utf-8')
+        
+        cursor.execute("""
+            INSERT INTO Users (wallet, ref_code) VALUES (%s, %s) RETURNING id_user
+        """, (wallet, "TESTCODE"))
+        user = cursor.fetchone()
+        user_id = user['id_user']
+        
+        # Создаем пари с прошедшей датой разрешения
+        past_date = datetime.now(timezone.utc) - timedelta(days=1)
+        cursor.execute("""
+            INSERT INTO public.predictions (
+                polymarket_id, title, outcome_a, outcome_b, 
+                outcome_a_probability, outcome_b_probability, 
+                resolution_date, status
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id_prediction
+        """, ("test-reward-1", "Reward Test Prediction", "Yes", "No", 60.0, 40.0, past_date, "active"))
+        prediction = cursor.fetchone()
+        prediction_id = prediction['id_prediction']
+        
+        # Создаем выигрышную ставку (пользователь выбрал A, а A более вероятен)
+        cursor.execute("""
+            INSERT INTO public.user_bets (id_user, id_prediction, chosen_outcome, status)
+            VALUES (%s, %s, %s, %s)
+            RETURNING id_bet
+        """, (user_id, prediction_id, "A", "pending"))
+        bet = cursor.fetchone()
+        bet_id = bet['id_bet']
+        
+        # Создаем проигрышную ставку (другой пользователь выбрал B)
+        signing_key2 = SigningKey.generate()
+        verify_key2 = signing_key2.verify_key
+        wallet2 = base58.b58encode(verify_key2.encode()).decode('utf-8')
+        cursor.execute("""
+            INSERT INTO Users (wallet, ref_code) VALUES (%s, %s) RETURNING id_user
+        """, (wallet2, "TESTCODE2"))
+        user2 = cursor.fetchone()
+        user_id2 = user2['id_user']
+        
+        cursor.execute("""
+            INSERT INTO public.user_bets (id_user, id_prediction, chosen_outcome, status)
+            VALUES (%s, %s, %s, %s)
+        """, (user_id2, prediction_id, "B", "pending"))
+        
+        db_connection.commit()
+        cursor.close()
+        
+        # Вызываем mark_resolved_predictions (должна автоматически выдать награды)
+        mark_resolved_predictions()
+        
+        # Проверяем, что пари помечено как resolved с правильным победителем
+        cursor = db_connection.cursor(cursor_factory=RealDictCursor)
+        cursor.execute("""
+            SELECT status, winner_outcome FROM public.predictions 
+            WHERE id_prediction = %s
+        """, (prediction_id,))
+        prediction_result = cursor.fetchone()
+        assert prediction_result['status'] == 'resolved'
+        assert prediction_result['winner_outcome'] == 'A'  # A более вероятен (60% vs 40%)
+        
+        # Проверяем, что выигрышная ставка помечена как won и награда выдана
+        cursor.execute("""
+            SELECT status, reward_issued, reward_type FROM public.user_bets 
+            WHERE id_bet = %s
+        """, (bet_id,))
+        bet_result = cursor.fetchone()
+        assert bet_result['status'] == 'won'
+        assert bet_result['reward_issued'] is True
+        assert bet_result['reward_type'] is not None  # Должен быть тип награды
+        
+        # Проверяем, что проигрышная ставка помечена как lost
+        cursor.execute("""
+            SELECT status, reward_issued FROM public.user_bets 
+            WHERE id_user = %s AND id_prediction = %s
+        """, (user_id2, prediction_id))
+        losing_bet = cursor.fetchone()
+        assert losing_bet['status'] == 'lost'
+        assert losing_bet['reward_issued'] is False
+        
+        # Проверяем, что награда действительно выдана (пак, карта или буст)
+        cursor.execute("""
+            SELECT COUNT(*) as count FROM Chest_purchases WHERE id_user = %s
+        """, (user_id,))
+        chests = cursor.fetchone()
+        chest_count = chests['count'] if chests else 0
+        
+        cursor.execute("""
+            SELECT COUNT(*) as count FROM Card_User WHERE id_user = %s
+        """, (user_id,))
+        cards = cursor.fetchone()
+        card_count = cards['count'] if cards else 0
+        
+        cursor.execute("""
+            SELECT COUNT(*) as count FROM User_boost WHERE id_user = %s AND is_active = TRUE
+        """, (user_id,))
+        boosts = cursor.fetchone()
+        boost_count = boosts['count'] if boosts else 0
+        
+        # Должна быть выдана хотя бы одна награда
+        assert (chest_count > 0) or (card_count > 0) or (boost_count > 0), \
+            f"Reward not issued: chests={chest_count}, cards={card_count}, boosts={boost_count}"
+        
+        cursor.close()
+    
     def test_get_active_predictions_count(self, clean_db, db_connection):
         """Тест: получение количества активных пари"""
         if db_connection is None:

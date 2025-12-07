@@ -5,17 +5,19 @@
 Этот сервис:
 - Обращается к Polymarket API и получает популярные пари
 - Отбирает пари с двумя вариантами ответов
-- Фильтрует пари где примерно 50/50 (45-55% вероятность)
+- Фильтрует пари где примерно равные шансы (30-70%, 40-60%, или 50-50%)
+- Фильтрует только близкие события (завершаются через 1-7 дней)
 - Фильтрует только популярные пари (объем > 1000$ за 24ч)
 - Записывает пари в БД (остаются до окончания - resolution_date)
 - Автоматически помечает завершенные пари как resolved
+- Поддерживает 10 активных пари
 
 Запуск:
-    # Однократный запуск (синхронизирует 50 пари)
+    # Однократный запуск (синхронизирует 10 пари)
     python app/services/polymarket_sync.py
 
-    # С указанием лимита
-    python app/services/polymarket_sync.py --limit 100
+    # С указанием целевого количества
+    python app/services/polymarket_sync.py --target 10
 
     # В режиме демона (синхронизация каждый час)
     python app/services/polymarket_sync.py --daemon
@@ -158,6 +160,7 @@ def parse_resolution_date(date_str):
 def fetch_polymarket_markets(limit: int = 100, use_markets_endpoint: bool = True) -> list:
     """
     Получает популярные пари из Polymarket API
+    Делает несколько запросов для получения до 3000 пари (API ограничивает до 500 за запрос)
     
     Args:
         limit: Максимальное количество пари для обработки
@@ -167,87 +170,102 @@ def fetch_polymarket_markets(limit: int = 100, use_markets_endpoint: bool = True
         Список пари с информацией о них
     """
     try:
-        # Используем прямой эндпоинт /markets для получения рынков
-        # Согласно документации: https://docs.polymarket.com/developers/gamma-markets-api/fetch-markets-guide
-        if use_markets_endpoint:
-            url = f"{POLYMARKET_API_URL}/markets"
-            params = {
-                "closed": False,  # Только активные рынки (boolean, не строка!)
-                "limit": min(limit * 3, 200),  # Запрашиваем больше для фильтрации
-                "order": "volume",  # Сортируем по объему (популярные первыми)
-                "ascending": False  # По убыванию объема
-            }
-        else:
-            # Fallback на /events (старый способ)
-            url = f"{POLYMARKET_API_URL}/events"
-            params = {
-                "closed": False,  # Только активные события (boolean, не строка!)
-                "limit": min(limit * 3, 200),
-                "order": "id",
-                "ascending": False
-            }
-        
         headers = {
             "Accept": "application/json",
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         }
         
-        print(f"[{datetime.now()}] Fetching markets from Polymarket API...")
-        print(f"  URL: {url}")
-        print(f"  Params: {params}")
-        from urllib.parse import urlencode
-        full_url = f"{url}?{urlencode(params)}"
-        print(f"  Full request URL: {full_url}")
-        
-        response = requests.get(url, params=params, headers=headers, timeout=30)
-        
-        print(f"  Response status: {response.status_code}")
-        print(f"  Response size: {len(response.content)} bytes")
-        
-        if response.status_code != 200:
-            print(f"ERROR: Polymarket API returned status {response.status_code}")
-            print(f"Response headers: {dict(response.headers)}")
-            print(f"Response body (first 1000 chars): {response.text[:1000]}")
-            return []
-        
-        data = response.json()
-        print(f"  Response JSON keys: {list(data.keys()) if isinstance(data, dict) else 'N/A (list)'}")
-        print(f"  Response data type: {type(data)}")
-        
-        # Обрабатываем разные форматы ответа API
-        # Согласно документации, ответ может быть массивом или объектом с данными
-        if isinstance(data, dict):
-            if 'data' in data:
-                data = data['data']
-            elif 'results' in data:
-                data = data['results']
-            elif 'markets' in data:
-                data = data['markets']
-            elif 'events' in data:
-                data = data['events']
-            else:
-                # Ищем массив в значениях
-                for key, value in data.items():
-                    if isinstance(value, list) and len(value) > 0:
-                        print(f"Found list in key '{key}' with {len(value)} items")
-                        data = value
-                        break
-                else:
-                    print(f"ERROR: Unexpected API response structure. Keys: {list(data.keys())[:10]}")
-                    return []
-        
-        if not data or not isinstance(data, list):
-            print(f"ERROR: API returned non-list data: {type(data)}")
-            return []
-        
-        # Если используем /markets эндпоинт, data уже содержит markets
-        # Если используем /events, нужно извлечь markets из events
         if use_markets_endpoint:
-            print(f"Processing {len(data)} markets directly from Polymarket API...")
-            markets_data = data
+            url = f"{POLYMARKET_API_URL}/markets"
+            # API ограничивает ответ до 500, поэтому делаем несколько запросов
+            target_limit = min(limit * 300, 3000)
+            all_markets_data = []
+            max_requests = (target_limit + 499) // 500  # Количество запросов (по 500 каждый)
+            
+            print(f"[{datetime.now()}] Fetching markets from Polymarket API (will make up to {max_requests} requests)...")
+            
+            for request_num in range(max_requests):
+                params = {
+                    "closed": False,
+                    "limit": 500,
+                    "offset": request_num * 500
+                }
+                
+                print(f"  Request {request_num + 1}/{max_requests}: offset={params['offset']}, limit={params['limit']}")
+                
+                response = requests.get(url, params=params, headers=headers, timeout=30)
+                
+                if response.status_code != 200:
+                    print(f"ERROR: Polymarket API returned status {response.status_code}")
+                    if request_num == 0:
+                        print(f"Response: {response.text[:500]}")
+                    break
+                
+                data = response.json()
+                
+                # Обрабатываем разные форматы ответа
+                if isinstance(data, dict):
+                    if 'data' in data:
+                        data = data['data']
+                    elif 'results' in data:
+                        data = data['results']
+                    elif 'markets' in data:
+                        data = data['markets']
+                    else:
+                        for key, value in data.items():
+                            if isinstance(value, list) and len(value) > 0:
+                                data = value
+                                break
+                        else:
+                            if request_num == 0:
+                                print(f"ERROR: Unexpected API response structure")
+                            break
+                
+                if not data or not isinstance(data, list):
+                    if request_num == 0:
+                        print(f"ERROR: API returned non-list data")
+                    break
+                
+                all_markets_data.extend(data)
+                print(f"  Received {len(data)} markets (total: {len(all_markets_data)})")
+                
+                # Если получили меньше 500, значит это последняя страница
+                if len(data) < 500:
+                    break
+                
+                time.sleep(0.5)  # Задержка между запросами
+            
+            markets_data = all_markets_data
+            print(f"Total markets fetched: {len(markets_data)}")
         else:
-            print(f"Processing {len(data)} events from Polymarket API...")
-            # Извлекаем все markets из events
+            # Fallback на /events
+            url = f"{POLYMARKET_API_URL}/events"
+            params = {
+                "closed": False,
+                "limit": min(limit * 3, 200),
+                "order": "id",
+                "ascending": False
+            }
+            
+            response = requests.get(url, params=params, headers=headers, timeout=30)
+            
+            if response.status_code != 200:
+                print(f"ERROR: Polymarket API returned status {response.status_code}")
+                return []
+            
+            data = response.json()
+            
+            if isinstance(data, dict):
+                if 'data' in data:
+                    data = data['data']
+                elif 'results' in data:
+                    data = data['results']
+                elif 'events' in data:
+                    data = data['events']
+            
+            if not data or not isinstance(data, list):
+                return []
+            
             markets_data = []
             for event in data:
                 event_markets = event.get('markets') or event.get('market') or []
@@ -255,17 +273,9 @@ def fetch_polymarket_markets(limit: int = 100, use_markets_endpoint: bool = True
                     event_markets = [event_markets]
                 if event_markets:
                     markets_data.extend(event_markets)
-            print(f"  Extracted {len(markets_data)} markets from {len(data)} events")
         
         if len(markets_data) > 0:
-            print(f"  First market keys: {list(markets_data[0].keys()) if isinstance(markets_data[0], dict) else 'N/A'}")
-            if isinstance(markets_data[0], dict):
-                sample_market = markets_data[0]
-                print(f"  Sample market structure:")
-                print(f"    - question: {sample_market.get('question', sample_market.get('title', 'N/A'))[:60]}")
-                print(f"    - closed: {sample_market.get('closed', 'N/A')}")
-                print(f"    - volume: {sample_market.get('volume', sample_market.get('volume24h', 'N/A'))}")
-                print(f"    - has outcomes: {'outcomes' in sample_market or 'outcomePrices' in sample_market}")
+            print(f"  First market keys: {list(markets_data[0].keys())[:10] if isinstance(markets_data[0], dict) else 'N/A'}")
         
         markets = []
         skipped_reasons = {
@@ -273,7 +283,9 @@ def fetch_polymarket_markets(limit: int = 100, use_markets_endpoint: bool = True
             'not_2_outcomes': 0,
             'wrong_probability': 0,
             'low_volume': 0,
-            'already_ended': 0
+            'already_ended': 0,
+            'wrong_date': 0,
+            'no_date': 0
         }
         
         for idx, market in enumerate(markets_data):
@@ -281,71 +293,43 @@ def fetch_polymarket_markets(limit: int = 100, use_markets_endpoint: bool = True
                 print(f"  Processed {idx}/{len(markets_data)} markets, found {len(markets)} valid markets...")
                 print(f"    Skipped: {skipped_reasons}")
             
-            # Обрабатываем market напрямую (не из event)
             # Проверяем, что рынок активен
             if market.get('closed', False) or market.get('status') == 'closed':
                 skipped_reasons['closed'] += 1
                 continue
             
-            # Получаем исходы - проверяем разные возможные поля согласно API
-            # Может быть outcomes (массив) или outcomePrices (массив цен)
+            # Получаем исходы
             outcomes = market.get('outcomes') or market.get('outcome') or market.get('tokens') or []
             
-            # Нормализуем outcomes в список
             if isinstance(outcomes, dict):
                 outcomes = list(outcomes.values()) if outcomes else []
             
-            # Проверяем, что есть хотя бы 2 исхода (для названий)
             if not outcomes or len(outcomes) < 2:
                 skipped_reasons['not_2_outcomes'] += 1
-                if idx < 3:  # Логируем первые несколько для отладки
-                    print(f"    Market {idx}: {len(outcomes) if outcomes else 0} outcomes (need 2)")
                 continue
             
             outcome_a_obj = outcomes[0] if isinstance(outcomes[0], dict) else {}
             outcome_b_obj = outcomes[1] if isinstance(outcomes[1], dict) else {}
             
-            # Получаем вероятности - проверяем outcomePrices сначала (согласно документации)
+            # Получаем вероятности
             outcome_prices_raw = market.get('outcomePrices')
             prob_a = 50.0
             prob_b = 50.0
             use_outcome_prices = False
             
-            # Проверяем, что outcomePrices это валидный список чисел
             if outcome_prices_raw and isinstance(outcome_prices_raw, list) and len(outcome_prices_raw) >= 2:
                 try:
                     price_a = outcome_prices_raw[0]
                     price_b = outcome_prices_raw[1]
                     
-                    # Проверяем, что это числа (не строки, не None, не специальные символы)
                     if isinstance(price_a, (int, float)) and isinstance(price_b, (int, float)):
-                        # Это уже числа, используем их
                         prob_a = float(price_a) * 100
                         prob_b = float(price_b) * 100
                         use_outcome_prices = True
-                    elif isinstance(price_a, str) and isinstance(price_b, str):
-                        # Если это строки, проверяем что это не специальные символы
-                        price_a_clean = price_a.strip().strip('[]').strip()
-                        price_b_clean = price_b.strip().strip('[]').strip()
-                        
-                        # Пропускаем если это пустая строка или только символы
-                        if price_a_clean and price_a_clean not in ['[', ']', '', 'None'] and price_b_clean and price_b_clean not in ['[', ']', '', 'None']:
-                            try:
-                                prob_a = float(price_a_clean) * 100
-                                prob_b = float(price_b_clean) * 100
-                                use_outcome_prices = True
-                            except (ValueError, TypeError):
-                                pass
-                except (ValueError, TypeError, IndexError) as e:
-                    # Если не удалось распарсить, используем outcomes
-                    if idx < 3:
-                        print(f"    Warning: Could not parse outcomePrices: {e}, using outcomes instead")
+                except (ValueError, TypeError):
+                    pass
             
-            # Если outcomePrices не сработал, парсим из outcomes
             if not use_outcome_prices:
-                prob_a = 50.0
-                prob_b = 50.0
-                
                 if 'price' in outcome_a_obj:
                     try:
                         prob_a = float(outcome_a_obj.get('price', 0.5)) * 100
@@ -377,24 +361,19 @@ def fetch_polymarket_markets(limit: int = 100, use_markets_endpoint: bool = True
                 prob_a = 50.0
                 prob_b = 50.0
             
-            # ФИЛЬТР: только пари где примерно 50/50 (от 45% до 55% - более строгий фильтр)
-            if not (45 <= prob_a <= 55 and 45 <= prob_b <= 55):
+            # ФИЛЬТР: только пари где примерно равные шансы
+            prob_diff = abs(prob_a - prob_b)
+            if not (30 <= prob_a <= 70 and 30 <= prob_b <= 70 and prob_diff <= 40):
                 skipped_reasons['wrong_probability'] += 1
-                if idx < 3:  # Логируем первые несколько для отладки
-                    print(f"    Market {idx}: probability {prob_a:.1f}% / {prob_b:.1f}% (need 45-55%)")
                 continue
             
-            # Получаем объемы - согласно документации поле называется 'volume'
+            # Получаем объемы
             volume_24h = float(market.get('volume24h') or market.get('volume_24h') or market.get('volume') or market.get('volumeUsd') or 0)
             volume_7d = float(market.get('volume7d') or market.get('volume_7d') or volume_24h * 7 or 0)
             volume_30d = float(market.get('volume30d') or market.get('volume_30d') or volume_24h * 30 or 0)
             
-            # Фильтр: только популярные (минимум 1000$ за 24ч)
-            if volume_24h < 1000:
-                skipped_reasons['low_volume'] += 1
-                if idx < 3:  # Логируем первые несколько для отладки
-                    print(f"    Market {idx}: volume 24h = ${volume_24h:.2f} (need > $1000)")
-                continue
+            # Фильтр по объему отключен - принимаем любые пари, даже с нулевым объемом
+            # Главное - чтобы подходили по дате и вероятностям
             
             # Получаем ID рынка
             market_id = market.get('id') or market.get('slug') or market.get('market_id') or ''
@@ -405,7 +384,7 @@ def fetch_polymarket_markets(limit: int = 100, use_markets_endpoint: bool = True
             # Получаем название
             title = market.get('question') or market.get('title') or 'Unknown Market'
             
-            # Получаем названия исходов из outcomes
+            # Получаем названия исходов
             outcome_a_title = outcome_a_obj.get('title') or outcome_a_obj.get('name') or 'Yes'
             outcome_b_title = outcome_b_obj.get('title') or outcome_b_obj.get('name') or 'No'
             
@@ -418,8 +397,21 @@ def fetch_polymarket_markets(limit: int = 100, use_markets_endpoint: bool = True
                 skipped_reasons['already_ended'] += 1
                 continue
             
-            # Логируем успешно найденное пари
-            print(f"  ✓ Found valid market: '{title[:60]}...' (prob: {prob_a:.1f}%/{prob_b:.1f}%, vol: ${volume_24h:.0f})")
+            # ФИЛЬТР: только события, которые закончатся в течение недели (1-7 дней)
+            if resolution_date:
+                now = datetime.now(timezone.utc)
+                time_until_resolution = resolution_date - now
+                days_until = time_until_resolution.total_seconds() / (24 * 3600)
+                
+                # Пропускаем события, которые закончатся раньше чем через 1 день или позже чем через 7 дней
+                if days_until < 1.0 or days_until > 7.0:
+                    skipped_reasons['wrong_date'] = skipped_reasons.get('wrong_date', 0) + 1
+                    continue
+            else:
+                skipped_reasons['no_date'] = skipped_reasons.get('no_date', 0) + 1
+                continue
+            
+            print(f"  ✓ Found valid market: '{title[:60]}...' (prob: {prob_a:.1f}%/{prob_b:.1f}%, vol: ${volume_24h:.0f}, days: {days_until:.1f})")
             
             markets.append({
                 "polymarket_id": str(market_id),
@@ -446,7 +438,7 @@ def fetch_polymarket_markets(limit: int = 100, use_markets_endpoint: bool = True
         for reason, count in skipped_reasons.items():
             if count > 0:
                 print(f"  - {reason}: {count}")
-        print(f"Criteria: 45-55% probability, 2 outcomes, volume > $1000, not ended")
+        print(f"Criteria: 30-70% probability (diff <= 40%), 2 outcomes, any volume, resolution in 1-7 days")
         print(f"================\n")
         
         return markets[:limit]
@@ -482,7 +474,6 @@ def save_markets_to_db(markets: list):
         
         for market in markets:
             try:
-                # Проверяем, существует ли уже такое пари
                 cursor.execute("""
                     SELECT id_prediction, status FROM public.predictions 
                     WHERE polymarket_id = %s
@@ -491,12 +482,10 @@ def save_markets_to_db(markets: list):
                 existing = cursor.fetchone()
                 
                 if existing:
-                    # Если пари уже разрешено, не обновляем
                     if existing['status'] == 'resolved':
                         skipped_count += 1
                         continue
                     
-                    # Обновляем существующее пари (обновляем проценты и другие данные)
                     cursor.execute("""
                         UPDATE public.predictions SET
                             title = %s,
@@ -527,10 +516,7 @@ def save_markets_to_db(markets: list):
                         market['polymarket_id']
                     ))
                     updated_count += 1
-                    if updated_count <= 3:  # Логируем первые несколько обновлений
-                        print(f"  ↻ Updated: '{market['title'][:50]}...' (prob: {market['outcome_a_probability']:.1f}%/{market['outcome_b_probability']:.1f}%)")
                 else:
-                    # Создаем новое пари
                     cursor.execute("""
                         INSERT INTO public.predictions (
                             polymarket_id, title, description, category,
@@ -577,6 +563,7 @@ def save_markets_to_db(markets: list):
 def mark_resolved_predictions():
     """
     Помечает пари как resolved, если resolution_date прошла
+    И автоматически выдает награды выигравшим пользователям
     """
     conn = None
     cursor = None
@@ -585,20 +572,102 @@ def mark_resolved_predictions():
         conn = get_db_connection()
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         
-        # Помечаем пари как resolved, если resolution_date прошла
+        # Находим пари, которые закончились, но еще не разрешены
         cursor.execute("""
-            UPDATE public.predictions 
-            SET status = 'resolved', updated_at = now()
+            SELECT id_prediction, outcome_a_probability, outcome_b_probability
+            FROM public.predictions 
             WHERE status = 'active' 
             AND resolution_date IS NOT NULL 
             AND resolution_date < now()
         """)
         
-        resolved_count = cursor.rowcount
+        expired_predictions = cursor.fetchall()
+        resolved_count = 0
+        rewards_issued_count = 0
+        
+        for prediction in expired_predictions:
+            prediction_id = prediction['id_prediction']
+            
+            # Определяем победителя на основе вероятностей
+            import random
+            prob_a = float(prediction['outcome_a_probability']) if prediction['outcome_a_probability'] else 50.0
+            prob_b = float(prediction['outcome_b_probability']) if prediction['outcome_b_probability'] else 50.0
+            
+            if abs(prob_a - prob_b) < 5.0:
+                winner_outcome = random.choice(['A', 'B'])
+            else:
+                winner_outcome = 'A' if prob_a > prob_b else 'B'
+            
+            # Обновляем статус пари
+            cursor.execute("""
+                UPDATE public.predictions 
+                SET status = 'resolved',
+                    winner_outcome = %s,
+                    updated_at = now()
+                WHERE id_prediction = %s
+            """, (winner_outcome, prediction_id))
+            
+            # Получаем список выигравших пользователей
+            cursor.execute("""
+                SELECT id_user FROM public.user_bets 
+                WHERE id_prediction = %s 
+                AND chosen_outcome = %s 
+                AND status = 'pending'
+            """, (prediction_id, winner_outcome))
+            winning_users = cursor.fetchall()
+            
+            # Выдаем награды выигравшим пользователям
+            for user_row in winning_users:
+                user_id = user_row['id_user']
+                try:
+                    from core.utils import issue_prediction_reward
+                    import json
+                    rewards_issued, reward_type, reward_data = issue_prediction_reward(cursor, conn, user_id)
+                    if rewards_issued:
+                        rewards_issued_count += 1
+                        cursor.execute("""
+                            UPDATE public.user_bets 
+                            SET reward_type = %s,
+                                reward_data = %s
+                            WHERE id_prediction = %s 
+                            AND id_user = %s 
+                            AND chosen_outcome = %s 
+                            AND status = 'pending'
+                        """, (reward_type, json.dumps(reward_data) if reward_data else None, prediction_id, user_id, winner_outcome))
+                        print(f"  ✓ Issued reward to user {user_id} for prediction {prediction_id}: {reward_type}")
+                except Exception as e:
+                    print(f"  ✗ Error issuing reward to user {user_id} for prediction {prediction_id}: {e}")
+                    import traceback
+                    traceback.print_exc()
+            
+            # Помечаем выигравшие ставки
+            cursor.execute("""
+                UPDATE public.user_bets 
+                SET status = 'won',
+                    resolved_at = now(),
+                    reward_issued = TRUE
+                WHERE id_prediction = %s 
+                AND chosen_outcome = %s 
+                AND status = 'pending'
+            """, (prediction_id, winner_outcome))
+            
+            # Помечаем проигравшие ставки
+            cursor.execute("""
+                UPDATE public.user_bets 
+                SET status = 'lost',
+                    resolved_at = now()
+                WHERE id_prediction = %s 
+                AND chosen_outcome != %s 
+                AND status = 'pending'
+            """, (prediction_id, winner_outcome))
+            
+            resolved_count += 1
+        
         conn.commit()
         
         if resolved_count > 0:
             print(f"Marked {resolved_count} predictions as resolved (resolution_date passed)")
+            print(f"Issued rewards to {rewards_issued_count} winning users")
         
     except Exception as e:
         print(f"ERROR marking resolved predictions: {e}")
@@ -640,38 +709,33 @@ def get_active_predictions_count():
             conn.close()
 
 
-def sync_polymarket_markets(target_count: int = 20):
+def sync_polymarket_markets(target_count: int = 10):
     """
     Основная функция синхронизации
     Поддерживает заданное количество активных пари в БД
     
     Args:
-        target_count: Целевое количество активных пари (по умолчанию 20)
+        target_count: Целевое количество активных пари (по умолчанию 10)
     """
     print(f"\n{'='*60}")
     print(f"[{datetime.now()}] Starting Polymarket sync...")
     print(f"{'='*60}\n")
     
-    # Ожидаем готовности БД
     if not wait_for_db():
         print("ERROR: Database is not available, exiting")
         return
     
-    # Сначала помечаем завершенные пари
     mark_resolved_predictions()
     
-    # Проверяем количество активных пари
     active_count = get_active_predictions_count()
     print(f"Current active predictions in DB: {active_count}")
     
-    # Получаем все доступные пари из Polymarket (больше чем нужно для обновления)
-    markets = fetch_polymarket_markets(limit=target_count * 3)  # Запрашиваем больше для выбора
+    markets = fetch_polymarket_markets(limit=target_count * 3)
     
     if not markets:
         print("No markets found from Polymarket API")
         return
     
-    # Получаем список уже существующих polymarket_id ДО обновления
     conn = None
     cursor = None
     existing_ids = set()
@@ -692,26 +756,21 @@ def sync_polymarket_markets(target_count: int = 20):
         if conn:
             conn.close()
     
-    # Разделяем пари на существующие (для обновления) и новые (для добавления)
     existing_markets = [m for m in markets if m['polymarket_id'] in existing_ids]
     new_markets = [m for m in markets if m['polymarket_id'] not in existing_ids]
     
-    # Сначала обновляем существующие пари (обновляем проценты)
     if existing_markets:
         print(f"\nUpdating {len(existing_markets)} existing predictions with new probabilities...")
         save_markets_to_db(existing_markets)
     
-    # Проверяем, сколько активных пари осталось после обновления
     active_count_after = get_active_predictions_count()
     print(f"Active predictions after update: {active_count_after}")
     
-    # Если активных пари меньше целевого количества, добавляем новые
     if active_count_after < target_count:
         needed = target_count - active_count_after
         print(f"\nNeed to add {needed} new predictions to reach target of {target_count}...")
         
         if new_markets:
-            # Берем только нужное количество новых пари
             markets_to_add = new_markets[:needed]
             print(f"Adding {len(markets_to_add)} new predictions...")
             save_markets_to_db(markets_to_add)
@@ -729,7 +788,7 @@ if __name__ == "__main__":
     import argparse
     
     parser = argparse.ArgumentParser(description='Sync predictions from Polymarket API')
-    parser.add_argument('--target', type=int, default=20, help='Target number of active predictions to maintain (default: 20)')
+    parser.add_argument('--target', type=int, default=10, help='Target number of active predictions to maintain (default: 10)')
     parser.add_argument('--daemon', action='store_true', help='Run as daemon (sync every hour)')
     parser.add_argument('--interval', type=int, default=3600, help='Sync interval in seconds (default: 3600 = 1 hour)')
     
@@ -739,7 +798,6 @@ if __name__ == "__main__":
         print(f"Running as daemon, syncing every {args.interval} seconds...")
         print(f"Target: {args.target} active predictions")
         print(f"Starting first sync immediately...")
-        # Выполняем первую синхронизацию сразу
         try:
             sync_polymarket_markets(target_count=args.target)
         except Exception as e:
@@ -747,7 +805,6 @@ if __name__ == "__main__":
             import traceback
             traceback.print_exc()
         
-        # Затем запускаем цикл с интервалом
         while True:
             try:
                 print(f"Waiting {args.interval} seconds until next sync...")
@@ -761,5 +818,4 @@ if __name__ == "__main__":
                 import traceback
                 traceback.print_exc()
     else:
-        # Однократный запуск
         sync_polymarket_markets(target_count=args.target)

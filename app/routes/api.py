@@ -2334,14 +2334,40 @@ def setup_api_routes(app):
     
     @app.get("/api/predictions/markets")
     async def get_predictions_markets(
+        request: Request,
         period: str = "24h",
         limit: int = 20,
         force_refresh: bool = False
     ):
-        """Получить список активных пари"""
+        """Получить список активных пари (исключает пари, на которые пользователь уже сделал ставку)"""
         try:
             conn = get_db_connection()
             cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            # Пытаемся получить информацию о пользователе из request state (установлено auth_middleware)
+            user_id = None
+            if request and hasattr(request.state, 'user'):
+                user_id = request.state.user.get('user_id')
+            
+            # Если нет user_id в state, пытаемся получить из заголовков или cookie
+            if not user_id:
+                x_wallet = request.headers.get("X-Wallet") if request else None
+                if x_wallet:
+                    cursor.execute("SELECT id_user FROM Users WHERE wallet = %s", (x_wallet,))
+                    user = cursor.fetchone()
+                    if user:
+                        user_id = user['id_user']
+                else:
+                    # Проверяем cookie
+                    if request:
+                        auth_token = request.cookies.get("auth_token")
+                        if auth_token:
+                            try:
+                                from core.sessions import verify_session_cookie
+                                user_data = await verify_session_cookie(request)
+                                user_id = user_data.get('user_id')
+                            except:
+                                pass  # Пользователь не авторизован, показываем все пари
             
             # Если force_refresh, можно запустить синхронизацию (но это долго, лучше не делать)
             # Просто получаем из БД
@@ -2353,29 +2379,57 @@ def setup_api_routes(app):
             elif period == "30d":
                 order_by = "volume_30d DESC"
             
-            cursor.execute(f"""
-                SELECT 
-                    id_prediction,
-                    polymarket_id,
-                    title,
-                    description,
-                    category,
-                    outcome_a,
-                    outcome_b,
-                    outcome_a_probability,
-                    outcome_b_probability,
-                    resolution_date,
-                    status,
-                    volume_24h,
-                    volume_7d,
-                    volume_30d,
-                    created_at,
-                    updated_at
-                FROM public.predictions
-                WHERE status = 'active'
-                ORDER BY {order_by}
-                LIMIT %s
-            """, (limit,))
+            # Если пользователь авторизован, исключаем пари, на которые он уже сделал ставку
+            if user_id:
+                cursor.execute(f"""
+                    SELECT 
+                        p.id_prediction,
+                        p.polymarket_id,
+                        p.title,
+                        p.description,
+                        p.category,
+                        p.outcome_a,
+                        p.outcome_b,
+                        p.outcome_a_probability,
+                        p.outcome_b_probability,
+                        p.resolution_date,
+                        p.status,
+                        p.volume_24h,
+                        p.volume_7d,
+                        p.volume_30d,
+                        p.created_at,
+                        p.updated_at
+                    FROM public.predictions p
+                    LEFT JOIN public.user_bets ub ON p.id_prediction = ub.id_prediction AND ub.id_user = %s
+                    WHERE p.status = 'active' AND ub.id_bet IS NULL
+                    ORDER BY {order_by}
+                    LIMIT %s
+                """, (user_id, limit))
+            else:
+                # Если пользователь не авторизован, показываем все активные пари
+                cursor.execute(f"""
+                    SELECT 
+                        id_prediction,
+                        polymarket_id,
+                        title,
+                        description,
+                        category,
+                        outcome_a,
+                        outcome_b,
+                        outcome_a_probability,
+                        outcome_b_probability,
+                        resolution_date,
+                        status,
+                        volume_24h,
+                        volume_7d,
+                        volume_30d,
+                        created_at,
+                        updated_at
+                    FROM public.predictions
+                    WHERE status = 'active'
+                    ORDER BY {order_by}
+                    LIMIT %s
+                """, (limit,))
             
             markets = cursor.fetchall()
             cursor.close()

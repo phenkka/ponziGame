@@ -25,6 +25,7 @@ document.addEventListener('DOMContentLoaded', function() {
         if (dynamicMenuOverlay) {
             dynamicMenuOverlay.style.opacity = '1';
             dynamicMenuOverlay.style.visibility = 'visible';
+            dynamicMenuOverlay.style.pointerEvents = 'auto'; // Делаем overlay кликабельным
         }
         
         dynamicMenuTrigger.style.animation = 'none';
@@ -45,6 +46,7 @@ document.addEventListener('DOMContentLoaded', function() {
         if (dynamicMenuOverlay) {
             dynamicMenuOverlay.style.opacity = '0';
             dynamicMenuOverlay.style.visibility = 'hidden';
+            dynamicMenuOverlay.style.pointerEvents = 'none'; // Отключаем кликабельность overlay
         }
         
         dynamicMenuTrigger.style.animation = 'menuPulse 3s ease-in-out infinite';
@@ -53,33 +55,59 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
     
-    // 1. Открытие при наведении на trigger
+    // 1. Открытие/закрытие при клике на trigger (для мобильных и десктопа)
+    dynamicMenuTrigger.addEventListener('click', function(e) {
+        e.stopPropagation(); // Предотвращаем всплытие события
+        if (isMenuOpen) {
+            closeMenu();
+        } else {
+            if (!clickBlocked) {
+                openMenu();
+            }
+        }
+    });
+    
+    // 2. Открытие при наведении на trigger (для десктопа)
     dynamicMenuTrigger.addEventListener('mouseenter', function() {
-        if (!clickBlocked) {
+        if (!clickBlocked && !isMenuOpen) {
             openMenu();
         }
     });
     
-    // 2. Закрытие при уходе с меню
+    // 3. Закрытие при уходе с меню (для десктопа)
     dynamicMenu.addEventListener('mouseleave', function(e) {
         if (!dynamicMenuTrigger.contains(e.relatedTarget)) {
             closeMenu();
         }
     });
     
-    // 3. Закрытие при уходе с trigger
+    // 4. Закрытие при уходе с trigger (для десктопа)
     dynamicMenuTrigger.addEventListener('mouseleave', function(e) {
         if (isMenuOpen && !dynamicMenu.contains(e.relatedTarget)) {
             closeMenu();
         }
     });
     
-    // 4. ЗАКРЫТИЕ ПРИ КЛИКЕ ВНЕ МЕНЮ - САМОЕ ВАЖНОЕ
+    // 5. ЗАКРЫТИЕ ПРИ КЛИКЕ НА OVERLAY (пустую зону)
+    if (dynamicMenuOverlay) {
+        dynamicMenuOverlay.addEventListener('click', function(e) {
+            e.stopPropagation();
+            closeMenu();
+        });
+    }
+    
+    // 6. ЗАКРЫТИЕ ПРИ КЛИКЕ ВНЕ МЕНЮ (на пустую зону)
     document.addEventListener('click', function(e) {
         if (!isMenuOpen) return;
         
-        // Если клик НЕ внутри контейнера меню - закрываем
-        if (!dynamicMenuContainer.contains(e.target)) {
+        // Если клик на overlay - закрываем
+        if (e.target === dynamicMenuOverlay) {
+            closeMenu();
+            return;
+        }
+        
+        // Если клик НЕ внутри меню и НЕ на триггере - закрываем
+        if (!dynamicMenu.contains(e.target) && !dynamicMenuTrigger.contains(e.target) && e.target !== dynamicMenuOverlay) {
             clickBlocked = true; // Блокируем открытие
             closeMenu();
             
@@ -92,8 +120,11 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Эффекты для элементов меню
     menuItems.forEach(item => {
-        item.addEventListener('click', function() {
-            setTimeout(() => closeMenu(), 200);
+        item.addEventListener('click', function(e) {
+            // Предотвращаем закрытие меню при клике на сам элемент меню
+            // Меню закроется только после перехода на другую страницу
+            // Не закрываем сразу, чтобы пользователь мог видеть, что клик прошел
+            setTimeout(() => closeMenu(), 300);
         });
         
         item.addEventListener('mouseenter', function() {
