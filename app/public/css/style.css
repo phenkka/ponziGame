@@ -725,6 +725,25 @@ body:not(.page-home) .page {
     font-weight: 800;
     font-size: 20px;
 }
+.checkin-progress-message {
+    margin-top: 12px;
+    padding: 12px 16px;
+    border-radius: 10px;
+    background: rgba(255, 193, 7, 0.1);
+    border: 1px solid rgba(255, 193, 7, 0.3);
+    transition: all 0.3s ease;
+}
+.checkin-progress-message[style*="color: rgb(76, 175, 80)"] {
+    background: rgba(76, 175, 80, 0.1);
+    border: 1px solid rgba(76, 175, 80, 0.3);
+}
+.checkin-progress-text {
+    font-family: 'Inter', sans-serif;
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 1.4;
+    display: block;
+}
 .checkin-input-section {
     display: flex !important;
     flex-direction: column;
@@ -2518,6 +2537,14 @@ body:not(.page-home) .last-jackpot-section .winner-wallet { font-size: 16px; }
     opacity: 0;
     visibility: hidden;
     transition: all 0.3s ease;
+    cursor: pointer;
+    z-index: 1000; /* Ниже меню, но выше всего остального */
+    pointer-events: none; /* По умолчанию не кликабелен */
+}
+
+/* Когда меню открыто, overlay становится кликабельным */
+.dynamic-menu-container.menu-open .dynamic-menu-overlay {
+    pointer-events: auto; /* Становится кликабельным когда меню открыто */
 }
 
 /* Убрано - используем класс .menu-open вместо hover */
@@ -2551,7 +2578,8 @@ body:not(.page-home) .last-jackpot-section .winner-wallet { font-size: 16px; }
     transition: all 0.3s ease;
     padding: 20px;
     box-sizing: border-box;
-    z-index: 1000;
+    z-index: 1001; /* Выше overlay, чтобы меню было поверх */
+    pointer-events: auto; /* Меню должно быть кликабельным */
 }
 
 /* Убрано - используем класс .menu-open вместо hover */

@@ -3,9 +3,6 @@
 # Скрипт для запуска тестов
 # Использование:
 #   ./run_tests.sh                    # Все тесты
-#   ./run_tests.sh polymarket_sync    # Только тесты синхронизации Polymarket
-#   ./run_tests.sh predictions        # Только тесты предсказаний
-#   ./run_tests.sh auth               # Только тесты авторизации
 
 echo "🧪 Запуск тестов..."
 echo ""

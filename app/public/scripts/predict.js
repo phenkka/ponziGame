@@ -21,7 +21,22 @@ async function loadPredictions(forceRefresh = false) {
         const url = `/api/predictions/markets?period=24h&limit=20${forceRefresh ? '&force_refresh=true' : ''}`;
         console.log('Fetching predictions from:', url);
         
-        const response = await fetch(url);
+        // Подготавливаем заголовки для авторизации (если пользователь авторизован)
+        const headers = {};
+        const wallet = currentWallet || sessionStorage.getItem('wallet') || localStorage.getItem('wallet');
+        const signature = sessionStorage.getItem('signature') || '';
+        const message = sessionStorage.getItem('message') || '';
+        
+        if (wallet && signature && message) {
+            headers['X-Wallet'] = wallet;
+            headers['X-Signature'] = signature;
+            headers['X-Message'] = message;
+        }
+        
+        const response = await fetch(url, {
+            headers: headers,
+            credentials: 'include'
+        });
         console.log('Predictions API response status:', response.status);
         
         if (!response.ok) {
@@ -296,7 +311,22 @@ function startProbabilityUpdates() {
     
     probabilityUpdateInterval = setInterval(async () => {
         try {
-            const response = await fetch(`/api/predictions/markets?period=24h&limit=20`);
+            // Подготавливаем заголовки для авторизации
+            const headers = {};
+            const wallet = currentWallet || sessionStorage.getItem('wallet') || localStorage.getItem('wallet');
+            const signature = sessionStorage.getItem('signature') || '';
+            const message = sessionStorage.getItem('message') || '';
+            
+            if (wallet && signature && message) {
+                headers['X-Wallet'] = wallet;
+                headers['X-Signature'] = signature;
+                headers['X-Message'] = message;
+            }
+            
+            const response = await fetch(`/api/predictions/markets?period=24h&limit=20`, {
+                headers: headers,
+                credentials: 'include'
+            });
             const data = await response.json();
             
             if (data.success && data.markets) {
