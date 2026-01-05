@@ -287,6 +287,10 @@ def fetch_polymarket_markets(limit: int = 100, use_markets_endpoint: bool = True
             'wrong_date': 0,
             'no_date': 0
         }
+
+        criteria_prob_diff_max = float(os.getenv("PREDICTIONS_PROB_DIFF_MAX", "30"))
+        criteria_days_min = float(os.getenv("PREDICTIONS_DAYS_MIN", "14"))
+        criteria_days_max = float(os.getenv("PREDICTIONS_DAYS_MAX", "21"))
         
         for idx, market in enumerate(markets_data):
             if idx % 50 == 0 and idx > 0:
@@ -363,7 +367,7 @@ def fetch_polymarket_markets(limit: int = 100, use_markets_endpoint: bool = True
             
             # ФИЛЬТР: только пари где примерно равные шансы
             prob_diff = abs(prob_a - prob_b)
-            if not (30 <= prob_a <= 70 and 30 <= prob_b <= 70 and prob_diff <= 40):
+            if prob_diff > criteria_prob_diff_max:
                 skipped_reasons['wrong_probability'] += 1
                 continue
             
@@ -397,14 +401,13 @@ def fetch_polymarket_markets(limit: int = 100, use_markets_endpoint: bool = True
                 skipped_reasons['already_ended'] += 1
                 continue
             
-            # ФИЛЬТР: только события, которые закончатся в течение недели (1-7 дней)
+            # ФИЛЬТР: только события, которые закончатся через 2-3 недели (по умолчанию 14-21 дней)
             if resolution_date:
                 now = datetime.now(timezone.utc)
                 time_until_resolution = resolution_date - now
                 days_until = time_until_resolution.total_seconds() / (24 * 3600)
                 
-                # Пропускаем события, которые закончатся раньше чем через 1 день или позже чем через 7 дней
-                if days_until < 1.0 or days_until > 7.0:
+                if days_until < criteria_days_min or days_until > criteria_days_max:
                     skipped_reasons['wrong_date'] = skipped_reasons.get('wrong_date', 0) + 1
                     continue
             else:
@@ -438,7 +441,7 @@ def fetch_polymarket_markets(limit: int = 100, use_markets_endpoint: bool = True
         for reason, count in skipped_reasons.items():
             if count > 0:
                 print(f"  - {reason}: {count}")
-        print(f"Criteria: 30-70% probability (diff <= 40%), 2 outcomes, any volume, resolution in 1-7 days")
+        print(f"Criteria: prob diff <= {criteria_prob_diff_max}%, 2 outcomes, any volume, resolution in {criteria_days_min}-{criteria_days_max} days")
         print(f"================\n")
         
         return markets[:limit]

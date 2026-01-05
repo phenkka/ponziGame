@@ -967,6 +967,88 @@ def setup_api_routes(app):
                 status_code=500,
                 content={"success": False, "error": f"Internal error: {str(e)}"}
             )
+
+    @app.post("/api/predictions/claim/{bet_id}")
+    async def claim_prediction_reward(bet_id: int, request: Request):
+        """Отметить награду по выигранной ставке как забранную (идемпотентно)."""
+        try:
+            # Берем wallet из middleware (или fallback на заголовки)
+            auth_wallet = None
+            if request and hasattr(request.state, 'user'):
+                auth_wallet = request.state.user.get('wallet')
+
+            if not auth_wallet:
+                x_wallet = request.headers.get("X-Wallet")
+                x_signature = request.headers.get("X-Signature")
+                x_message = request.headers.get("X-Message")
+                if x_wallet and x_signature and x_message:
+                    auth_data = await verify_auth(x_wallet=x_wallet, x_signature=x_signature, x_message=x_message)
+                    auth_wallet = auth_data.get("wallet")
+
+            if not auth_wallet:
+                return JSONResponse(status_code=401, content={"success": False, "error": "Unauthorized"})
+
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+
+            # Получаем id_user по wallet
+            cursor.execute("SELECT id_user FROM Users WHERE wallet = %s", (auth_wallet,))
+            user = cursor.fetchone()
+            if not user:
+                cursor.close()
+                conn.close()
+                return JSONResponse(status_code=401, content={"success": False, "error": "Unauthorized"})
+            user_id = user['id_user']
+
+            # Проверяем ставку и ownership
+            cursor.execute("""
+                SELECT id_bet, id_user, status, reward_issued, reward_claimed
+                FROM public.user_bets
+                WHERE id_bet = %s
+            """, (bet_id,))
+            bet = cursor.fetchone()
+            if not bet:
+                cursor.close()
+                conn.close()
+                return JSONResponse(status_code=404, content={"success": False, "error": "Bet not found"})
+
+            if bet['id_user'] != user_id:
+                cursor.close()
+                conn.close()
+                return JSONResponse(status_code=403, content={"success": False, "error": "Forbidden"})
+
+            # Разрешаем claim только если ставка выиграна и награда была выдана
+            if bet.get('status') != 'won' or not bet.get('reward_issued'):
+                cursor.close()
+                conn.close()
+                return JSONResponse(status_code=400, content={"success": False, "error": "Reward not available"})
+
+            already_claimed = bool(bet.get('reward_claimed'))
+            if not already_claimed:
+                cursor.execute("""
+                    UPDATE public.user_bets
+                    SET reward_claimed = TRUE,
+                        reward_claimed_at = now()
+                    WHERE id_bet = %s
+                """, (bet_id,))
+                conn.commit()
+
+            cursor.close()
+            conn.close()
+
+            return {
+                "success": True,
+                "bet_id": bet_id,
+                "already_claimed": already_claimed
+            }
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            print(f"Claim prediction reward error: {e}")
+            import traceback
+            traceback.print_exc()
+            return JSONResponse(status_code=500, content={"success": False, "error": f"Internal error: {str(e)}"})
     
     @app.post("/api/chests/buy")
     async def buy_chest(request: Request):
@@ -2379,6 +2461,10 @@ def setup_api_routes(app):
             elif period == "30d":
                 order_by = "volume_30d DESC"
             
+            criteria_prob_diff_max = float(os.getenv("PREDICTIONS_PROB_DIFF_MAX", "30"))
+            criteria_days_min = float(os.getenv("PREDICTIONS_DAYS_MIN", "14"))
+            criteria_days_max = float(os.getenv("PREDICTIONS_DAYS_MAX", "21"))
+
             # Если пользователь авторизован, исключаем пари, на которые он уже сделал ставку
             if user_id:
                 cursor.execute(f"""
@@ -2401,10 +2487,15 @@ def setup_api_routes(app):
                         p.updated_at
                     FROM public.predictions p
                     LEFT JOIN public.user_bets ub ON p.id_prediction = ub.id_prediction AND ub.id_user = %s
-                    WHERE p.status = 'active' AND ub.id_bet IS NULL
+                    WHERE p.status = 'active'
+                      AND ub.id_bet IS NULL
+                      AND p.resolution_date IS NOT NULL
+                      AND p.resolution_date > (now() + (%s * interval '1 day'))
+                      AND p.resolution_date < (now() + (%s * interval '1 day'))
+                      AND ABS(COALESCE(p.outcome_a_probability, 50) - COALESCE(p.outcome_b_probability, 50)) <= %s
                     ORDER BY {order_by}
                     LIMIT %s
-                """, (user_id, limit))
+                """, (user_id, criteria_days_min, criteria_days_max, criteria_prob_diff_max, limit))
             else:
                 # Если пользователь не авторизован, показываем все активные пари
                 cursor.execute(f"""
@@ -2427,9 +2518,13 @@ def setup_api_routes(app):
                         updated_at
                     FROM public.predictions
                     WHERE status = 'active'
+                      AND resolution_date IS NOT NULL
+                      AND resolution_date > (now() + (%s * interval '1 day'))
+                      AND resolution_date < (now() + (%s * interval '1 day'))
+                      AND ABS(COALESCE(outcome_a_probability, 50) - COALESCE(outcome_b_probability, 50)) <= %s
                     ORDER BY {order_by}
                     LIMIT %s
-                """, (limit,))
+                """, (criteria_days_min, criteria_days_max, criteria_prob_diff_max, limit))
             
             markets = cursor.fetchall()
             cursor.close()
@@ -2438,6 +2533,7 @@ def setup_api_routes(app):
             # Преобразуем в список словарей
             markets_list = []
             for market in markets:
+                ends_at = str(market['resolution_date']) if market['resolution_date'] else None
                 markets_list.append({
                     "id_prediction": market['id_prediction'],
                     "polymarket_id": market['polymarket_id'],
@@ -2448,7 +2544,8 @@ def setup_api_routes(app):
                     "outcome_b": market['outcome_b'],
                     "outcome_a_probability": float(market['outcome_a_probability']) if market['outcome_a_probability'] else 50.0,
                     "outcome_b_probability": float(market['outcome_b_probability']) if market['outcome_b_probability'] else 50.0,
-                    "resolution_date": str(market['resolution_date']) if market['resolution_date'] else None,
+                    "resolution_date": ends_at,
+                    "ends_at": ends_at,
                     "status": market['status'],
                     "volume_24h": float(market['volume_24h']) if market['volume_24h'] else 0.0,
                     "volume_7d": float(market['volume_7d']) if market['volume_7d'] else 0.0,
@@ -2509,9 +2606,14 @@ def setup_api_routes(app):
                 )
             user_id = user['id_user']
             
+            criteria_prob_diff_max = float(os.getenv("PREDICTIONS_PROB_DIFF_MAX", "30"))
+            criteria_days_min = float(os.getenv("PREDICTIONS_DAYS_MIN", "14"))
+            criteria_days_max = float(os.getenv("PREDICTIONS_DAYS_MAX", "21"))
+
             # Проверяем, что пари существует и активно
             cursor.execute("""
-                SELECT id_prediction, status FROM public.predictions 
+                SELECT id_prediction, status, outcome_a_probability, outcome_b_probability, resolution_date
+                FROM public.predictions 
                 WHERE id_prediction = %s
             """, (prediction_id,))
             prediction = cursor.fetchone()
@@ -2530,6 +2632,41 @@ def setup_api_routes(app):
                 return JSONResponse(
                     status_code=400,
                     content={"success": False, "error": "Prediction is not active"}
+                )
+
+            from datetime import datetime, timezone
+            ends_at = prediction.get('resolution_date')
+            if not ends_at:
+                cursor.close()
+                conn.close()
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "error": "Prediction does not meet criteria"}
+                )
+
+            if isinstance(ends_at, str):
+                try:
+                    ends_at = datetime.fromisoformat(ends_at.replace('Z', '+00:00'))
+                except Exception:
+                    cursor.close()
+                    conn.close()
+                    return JSONResponse(
+                        status_code=400,
+                        content={"success": False, "error": "Prediction does not meet criteria"}
+                    )
+
+            now = datetime.now(timezone.utc)
+            if ends_at.tzinfo is None:
+                ends_at = ends_at.replace(tzinfo=timezone.utc)
+            days_until = (ends_at - now).total_seconds() / (24 * 3600)
+            prob_a = float(prediction.get('outcome_a_probability') or 50.0)
+            prob_b = float(prediction.get('outcome_b_probability') or 50.0)
+            if abs(prob_a - prob_b) > criteria_prob_diff_max or days_until < criteria_days_min or days_until > criteria_days_max:
+                cursor.close()
+                conn.close()
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "error": "Prediction does not meet criteria"}
                 )
             
             # Проверяем, нет ли уже ставки от этого пользователя
@@ -2608,6 +2745,8 @@ def setup_api_routes(app):
                     ub.chosen_outcome,
                     ub.status,
                     ub.reward_issued,
+                    ub.reward_claimed,
+                    ub.reward_claimed_at,
                     ub.reward_type,
                     ub.reward_data,
                     ub.created_at,
@@ -2617,6 +2756,7 @@ def setup_api_routes(app):
                     p.outcome_b,
                     p.outcome_a_probability,
                     p.outcome_b_probability,
+                    p.resolution_date,
                     p.status as prediction_status,
                     p.winner_outcome
                 FROM public.user_bets ub
@@ -2631,6 +2771,7 @@ def setup_api_routes(app):
             
             bets_list = []
             for bet in bets:
+                ends_at = str(bet['resolution_date']) if bet.get('resolution_date') else None
                 bets_list.append({
                     "bet_id": bet['id_bet'],
                     "prediction_id": bet['id_prediction'],
@@ -2642,10 +2783,13 @@ def setup_api_routes(app):
                     "outcome_b_probability": float(bet['outcome_b_probability']) if bet['outcome_b_probability'] else 50.0,
                     "status": bet['status'],
                     "reward_issued": bool(bet.get('reward_issued')),
+                    "reward_claimed": bool(bet.get('reward_claimed')),
+                    "reward_claimed_at": str(bet['reward_claimed_at']) if bet.get('reward_claimed_at') else None,
                     "reward_type": bet.get('reward_type'),
                     "reward_data": bet.get('reward_data'),
                     "prediction_status": bet['prediction_status'],
                     "winner_outcome": bet['winner_outcome'],
+                    "ends_at": ends_at,
                     "created_at": str(bet['created_at']),
                     "resolved_at": str(bet['resolved_at']) if bet['resolved_at'] else None
                 })

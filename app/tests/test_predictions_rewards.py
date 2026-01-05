@@ -133,6 +133,200 @@ class TestPredictionsRewardDistribution:
             assert returned_bet.get("reward_issued") is True
             assert returned_bet.get("reward_type") is not None
             assert returned_bet.get("reward_data") is not None
+
+    @pytest.mark.asyncio
+    async def test_claim_reward_idempotent(self, clean_db, db_connection, monkeypatch):
+        """Тест: claim награды идемпотентный (повторно забрать нельзя)."""
+        if db_connection is None:
+            pytest.skip("Database not available")
+
+        cursor = db_connection.cursor(cursor_factory=RealDictCursor)
+
+        signing_key = SigningKey.generate()
+        wallet = base58.b58encode(signing_key.verify_key.encode()).decode('utf-8')
+
+        cursor.execute("""
+            INSERT INTO Users (wallet, ref_code) VALUES (%s, %s) RETURNING id_user
+        """, (wallet, "TESTCODE_CLAIM"))
+        user_id = cursor.fetchone()['id_user']
+
+        cursor.execute("""
+            INSERT INTO public.predictions (
+                polymarket_id, title, outcome_a, outcome_b,
+                outcome_a_probability, outcome_b_probability,
+                resolution_date, status
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id_prediction
+        """, (
+            "test-claim-1", "Test", "Yes", "No",
+            50.0, 50.0, datetime.now(timezone.utc) + timedelta(days=15), "active"
+        ))
+        prediction_id = cursor.fetchone()['id_prediction']
+
+        cursor.execute("""
+            INSERT INTO public.user_bets (id_user, id_prediction, chosen_outcome, status, reward_issued)
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING id_bet
+        """, (user_id, prediction_id, "A", "won", True))
+        bet_id = cursor.fetchone()['id_bet']
+
+        db_connection.commit()
+        cursor.close()
+
+        signed = signing_key.sign(b"test message")
+        signature_list = list(signed.signature)
+        headers = {
+            "X-Wallet": wallet,
+            "X-Signature": json.dumps(signature_list),
+            "X-Message": "test message",
+            "Content-Type": "application/json"
+        }
+
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            # Первый claim
+            r1 = await client.post(f"/api/predictions/claim/{bet_id}", headers=headers)
+            assert r1.status_code == 200
+            d1 = r1.json()
+            assert d1["success"] is True
+            assert d1["already_claimed"] is False
+
+            # Второй claim
+            r2 = await client.post(f"/api/predictions/claim/{bet_id}", headers=headers)
+            assert r2.status_code == 200
+            d2 = r2.json()
+            assert d2["success"] is True
+            assert d2["already_claimed"] is True
+
+        # Проверяем в БД, что флаг выставлен и время заполнено
+        cursor = db_connection.cursor(cursor_factory=RealDictCursor)
+        cursor.execute("""
+            SELECT reward_claimed, reward_claimed_at
+            FROM public.user_bets
+            WHERE id_bet = %s
+        """, (bet_id,))
+        row = cursor.fetchone()
+        assert row is not None
+        assert row['reward_claimed'] is True
+        assert row['reward_claimed_at'] is not None
+        cursor.close()
+
+    @pytest.mark.asyncio
+    async def test_claim_reward_forbidden_for_other_user(self, clean_db, db_connection):
+        """Тест: нельзя claim награду по чужой ставке."""
+        if db_connection is None:
+            pytest.skip("Database not available")
+
+        cursor = db_connection.cursor(cursor_factory=RealDictCursor)
+
+        sk1 = SigningKey.generate()
+        w1 = base58.b58encode(sk1.verify_key.encode()).decode('utf-8')
+        sk2 = SigningKey.generate()
+        w2 = base58.b58encode(sk2.verify_key.encode()).decode('utf-8')
+
+        cursor.execute("INSERT INTO Users (wallet, ref_code) VALUES (%s, %s) RETURNING id_user", (w1, "C1"))
+        u1 = cursor.fetchone()['id_user']
+        cursor.execute("INSERT INTO Users (wallet, ref_code) VALUES (%s, %s) RETURNING id_user", (w2, "C2"))
+        u2 = cursor.fetchone()['id_user']
+
+        cursor.execute("""
+            INSERT INTO public.predictions (
+                polymarket_id, title, outcome_a, outcome_b,
+                outcome_a_probability, outcome_b_probability,
+                resolution_date, status
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id_prediction
+        """, (
+            "test-claim-2", "Test", "Yes", "No",
+            50.0, 50.0, datetime.now(timezone.utc) + timedelta(days=15), "active"
+        ))
+        prediction_id = cursor.fetchone()['id_prediction']
+
+        cursor.execute("""
+            INSERT INTO public.user_bets (id_user, id_prediction, chosen_outcome, status, reward_issued)
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING id_bet
+        """, (u1, prediction_id, "A", "won", True))
+        bet_id = cursor.fetchone()['id_bet']
+
+        db_connection.commit()
+        cursor.close()
+
+        signed = sk2.sign(b"test message")
+        headers = {
+            "X-Wallet": w2,
+            "X-Signature": json.dumps(list(signed.signature)),
+            "X-Message": "test message",
+            "Content-Type": "application/json"
+        }
+
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            r = await client.post(f"/api/predictions/claim/{bet_id}", headers=headers)
+            assert r.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_claim_reward_not_available_for_loser_or_not_issued(self, clean_db, db_connection, auth_headers):
+        """Тест: claim возможен только для won + reward_issued."""
+        if db_connection is None:
+            pytest.skip("Database not available")
+
+        wallet = auth_headers["X-Wallet"]
+
+        cursor = db_connection.cursor(cursor_factory=RealDictCursor)
+        cursor.execute("INSERT INTO Users (wallet, ref_code) VALUES (%s, %s) RETURNING id_user", (wallet, "CLAIMNA"))
+        user_id = cursor.fetchone()['id_user']
+
+        # Создаем два разных пари, чтобы не нарушать unique(id_user, id_prediction)
+        cursor.execute("""
+            INSERT INTO public.predictions (
+                polymarket_id, title, outcome_a, outcome_b,
+                outcome_a_probability, outcome_b_probability,
+                resolution_date, status
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id_prediction
+        """, (
+            "test-claim-3-lost", "Test", "Yes", "No",
+            50.0, 50.0, datetime.now(timezone.utc) + timedelta(days=15), "active"
+        ))
+        prediction_lost_id = cursor.fetchone()['id_prediction']
+
+        cursor.execute("""
+            INSERT INTO public.predictions (
+                polymarket_id, title, outcome_a, outcome_b,
+                outcome_a_probability, outcome_b_probability,
+                resolution_date, status
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id_prediction
+        """, (
+            "test-claim-3-not-issued", "Test", "Yes", "No",
+            50.0, 50.0, datetime.now(timezone.utc) + timedelta(days=15), "active"
+        ))
+        prediction_not_issued_id = cursor.fetchone()['id_prediction']
+
+        # Lost
+        cursor.execute("""
+            INSERT INTO public.user_bets (id_user, id_prediction, chosen_outcome, status, reward_issued)
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING id_bet
+        """, (user_id, prediction_lost_id, "A", "lost", True))
+        lost_bet_id = cursor.fetchone()['id_bet']
+
+        # Won but reward_issued = false
+        cursor.execute("""
+            INSERT INTO public.user_bets (id_user, id_prediction, chosen_outcome, status, reward_issued)
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING id_bet
+        """, (user_id, prediction_not_issued_id, "A", "won", False))
+        not_issued_bet_id = cursor.fetchone()['id_bet']
+
+        db_connection.commit()
+        cursor.close()
+
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            r1 = await client.post(f"/api/predictions/claim/{lost_bet_id}", headers=auth_headers)
+            assert r1.status_code == 400
+
+            r2 = await client.post(f"/api/predictions/claim/{not_issued_bet_id}", headers=auth_headers)
+            assert r2.status_code == 400
     
     @pytest.mark.asyncio
     async def test_reward_broken_packs(self, clean_db, db_connection):

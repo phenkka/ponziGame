@@ -40,15 +40,18 @@ class TestPredictionsMarkets:
         
         # Создаем тестовое пари в БД
         cursor = db_connection.cursor()
+        resolution_date = datetime.now(timezone.utc) + timedelta(days=15)
         cursor.execute("""
             INSERT INTO public.predictions (
                 polymarket_id, title, description, category,
                 outcome_a, outcome_b, outcome_a_probability, outcome_b_probability,
+                resolution_date,
                 volume_24h, volume_7d, volume_30d, status
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (
             "test-market-1", "Will Bitcoin reach $100k?", "Test prediction", "crypto",
             "Yes", "No", 45.5, 54.5,
+            resolution_date,
             5000.0, 30000.0, 100000.0, "active"
         ))
         db_connection.commit()
@@ -62,6 +65,89 @@ class TestPredictionsMarkets:
             assert "markets" in data
             assert len(data["markets"]) > 0
             assert data["markets"][0]["title"] == "Will Bitcoin reach $100k?"
+            assert data["markets"][0].get("ends_at") is not None
+
+    @pytest.mark.asyncio
+    async def test_get_markets_filters_by_probability_and_date(self, clean_db, db_connection):
+        """Тест: markets фильтрует пари по критериям (≈50/50 и 14-21 день)"""
+        if db_connection is None:
+            pytest.skip("Database not available")
+
+        cursor = db_connection.cursor()
+
+        # Валидное
+        cursor.execute("""
+            INSERT INTO public.predictions (
+                polymarket_id, title, description, category,
+                outcome_a, outcome_b, outcome_a_probability, outcome_b_probability,
+                resolution_date,
+                volume_24h, volume_7d, volume_30d, status
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (
+            "valid-market", "Valid", "", "general",
+            "Yes", "No", 49.0, 51.0,
+            datetime.now(timezone.utc) + timedelta(days=15),
+            0.0, 0.0, 0.0, "active"
+        ))
+
+        # Валидное по вероятностям на границе (35/65 => diff=30)
+        cursor.execute("""
+            INSERT INTO public.predictions (
+                polymarket_id, title, description, category,
+                outcome_a, outcome_b, outcome_a_probability, outcome_b_probability,
+                resolution_date,
+                volume_24h, volume_7d, volume_30d, status
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (
+            "border-prob", "Border Prob", "", "general",
+            "Yes", "No", 35.0, 65.0,
+            datetime.now(timezone.utc) + timedelta(days=15),
+            0.0, 0.0, 0.0, "active"
+        ))
+
+        # Невалидное по вероятностям (diff > 30)
+        cursor.execute("""
+            INSERT INTO public.predictions (
+                polymarket_id, title, description, category,
+                outcome_a, outcome_b, outcome_a_probability, outcome_b_probability,
+                resolution_date,
+                volume_24h, volume_7d, volume_30d, status
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (
+            "bad-prob", "Bad Prob", "", "general",
+            "Yes", "No", 34.0, 66.0,
+            datetime.now(timezone.utc) + timedelta(days=15),
+            0.0, 0.0, 0.0, "active"
+        ))
+
+        # Невалидное по дате (слишком рано)
+        cursor.execute("""
+            INSERT INTO public.predictions (
+                polymarket_id, title, description, category,
+                outcome_a, outcome_b, outcome_a_probability, outcome_b_probability,
+                resolution_date,
+                volume_24h, volume_7d, volume_30d, status
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (
+            "bad-date", "Bad Date", "", "general",
+            "Yes", "No", 49.0, 51.0,
+            datetime.now(timezone.utc) + timedelta(days=2),
+            0.0, 0.0, 0.0, "active"
+        ))
+
+        db_connection.commit()
+        cursor.close()
+
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            response = await client.get("/api/predictions/markets?period=24h&limit=50")
+            assert response.status_code == 200
+            data = response.json()
+            assert data["success"] is True
+            returned_ids = {m.get("polymarket_id") for m in data.get("markets", [])}
+            assert "valid-market" in returned_ids
+            assert "border-prob" in returned_ids
+            assert "bad-prob" not in returned_ids
+            assert "bad-date" not in returned_ids
     
     @pytest.mark.asyncio
     async def test_get_markets_empty(self, clean_db, db_connection):
@@ -86,11 +172,15 @@ class TestPredictionsBets:
         
         # Создаем пари в БД
         cursor = db_connection.cursor()
+        resolution_date = datetime.now(timezone.utc) + timedelta(days=15)
         cursor.execute("""
-            INSERT INTO public.predictions (polymarket_id, title, outcome_a, outcome_b, status)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO public.predictions (
+                polymarket_id, title, outcome_a, outcome_b,
+                outcome_a_probability, outcome_b_probability,
+                resolution_date, status
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id_prediction
-        """, ("test-1", "Test Prediction", "Yes", "No", "active"))
+        """, ("test-1", "Test Prediction", "Yes", "No", 50.0, 50.0, resolution_date, "active"))
         prediction_id = cursor.fetchone()[0]
         db_connection.commit()
         cursor.close()
@@ -119,11 +209,15 @@ class TestPredictionsBets:
         user_id = user['id_user']
         
         # Создаем пари
+        resolution_date = datetime.now(timezone.utc) + timedelta(days=15)
         cursor.execute("""
-            INSERT INTO public.predictions (polymarket_id, title, outcome_a, outcome_b, status)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO public.predictions (
+                polymarket_id, title, outcome_a, outcome_b,
+                outcome_a_probability, outcome_b_probability,
+                resolution_date, status
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id_prediction
-        """, ("test-1", "Test Prediction", "Yes", "No", "active"))
+        """, ("test-1", "Test Prediction", "Yes", "No", 50.0, 50.0, resolution_date, "active"))
         prediction = cursor.fetchone()
         prediction_id = prediction['id_prediction']
         
@@ -158,11 +252,15 @@ class TestPredictionsBets:
         user_id = user['id_user']
         
         # Создаем пари
+        resolution_date = datetime.now(timezone.utc) + timedelta(days=15)
         cursor.execute("""
-            INSERT INTO public.predictions (polymarket_id, title, outcome_a, outcome_b, status)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO public.predictions (
+                polymarket_id, title, outcome_a, outcome_b,
+                outcome_a_probability, outcome_b_probability,
+                resolution_date, status
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id_prediction
-        """, ("test-1", "Test Prediction", "Yes", "No", "active"))
+        """, ("test-1", "Test Prediction", "Yes", "No", 50.0, 50.0, resolution_date, "active"))
         prediction = cursor.fetchone()
         prediction_id = prediction['id_prediction']
         
@@ -202,10 +300,13 @@ class TestPredictionsBets:
         user = cursor.fetchone()
         
         cursor.execute("""
-            INSERT INTO public.predictions (polymarket_id, title, outcome_a, outcome_b, status)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO public.predictions (
+                polymarket_id, title, outcome_a, outcome_b,
+                outcome_a_probability, outcome_b_probability,
+                resolution_date, status
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id_prediction
-        """, ("test-1", "Test", "Yes", "No", "active"))
+        """, ("test-1", "Test", "Yes", "No", 50.0, 50.0, datetime.now(timezone.utc) + timedelta(days=15), "active"))
         prediction = cursor.fetchone()
         prediction_id = prediction['id_prediction']
         
@@ -237,10 +338,13 @@ class TestPredictionsBets:
         user = cursor.fetchone()
         
         cursor.execute("""
-            INSERT INTO public.predictions (polymarket_id, title, outcome_a, outcome_b, status)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO public.predictions (
+                polymarket_id, title, outcome_a, outcome_b,
+                outcome_a_probability, outcome_b_probability,
+                resolution_date, status
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id_prediction
-        """, ("test-1", "Test", "Yes", "No", "resolved"))  # Уже разрешено
+        """, ("test-1", "Test", "Yes", "No", 50.0, 50.0, datetime.now(timezone.utc) + timedelta(days=15), "resolved"))  # Уже разрешено
         prediction = cursor.fetchone()
         prediction_id = prediction['id_prediction']
         
@@ -415,11 +519,14 @@ class TestPredictionsEdgeCases:
         cursor.execute("INSERT INTO Users (wallet, ref_code) VALUES (%s, %s)", (wallet, "TESTCODE"))
         cursor.execute(
             """
-            INSERT INTO public.predictions (polymarket_id, title, outcome_a, outcome_b, status)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO public.predictions (
+                polymarket_id, title, outcome_a, outcome_b,
+                outcome_a_probability, outcome_b_probability,
+                resolution_date, status
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id_prediction
             """,
-            ("test-admin-1", "Test", "Yes", "No", "active")
+            ("test-admin-1", "Test", "Yes", "No", 50.0, 50.0, datetime.now(timezone.utc) + timedelta(days=15), "active")
         )
         prediction_id = cursor.fetchone()[0]
         db_connection.commit()
@@ -466,11 +573,14 @@ class TestPredictionsEdgeCases:
 
         cursor.execute(
             """
-            INSERT INTO public.predictions (polymarket_id, title, outcome_a, outcome_b, status)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO public.predictions (
+                polymarket_id, title, outcome_a, outcome_b,
+                outcome_a_probability, outcome_b_probability,
+                resolution_date, status
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id_prediction
             """,
-            ("test-idem-1", "Test", "Yes", "No", "active")
+            ("test-idem-1", "Test", "Yes", "No", 50.0, 50.0, datetime.now(timezone.utc) + timedelta(days=15), "active")
         )
         prediction_id = cursor.fetchone()["id_prediction"]
 
@@ -546,10 +656,13 @@ class TestPredictionsEdgeCases:
             INSERT INTO Users (wallet, ref_code) VALUES (%s, %s)
         """, (test_wallet, "TESTCODE"))
         cursor.execute("""
-            INSERT INTO public.predictions (polymarket_id, title, outcome_a, outcome_b, status)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO public.predictions (
+                polymarket_id, title, outcome_a, outcome_b,
+                outcome_a_probability, outcome_b_probability,
+                resolution_date, status
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id_prediction
-        """, ("test-1", "Test", "Yes", "No", "active"))
+        """, ("test-1", "Test", "Yes", "No", 50.0, 50.0, datetime.now(timezone.utc) + timedelta(days=15), "active"))
         prediction_id = cursor.fetchone()[0]
         db_connection.commit()
         cursor.close()
@@ -594,10 +707,13 @@ class TestPredictionsEdgeCases:
         user_id = user['id_user']
         
         cursor.execute("""
-            INSERT INTO public.predictions (polymarket_id, title, outcome_a, outcome_b, status)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO public.predictions (
+                polymarket_id, title, outcome_a, outcome_b,
+                outcome_a_probability, outcome_b_probability,
+                resolution_date, status
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id_prediction
-        """, ("test-1", "Test", "Yes", "No", "active"))
+        """, ("test-1", "Test", "Yes", "No", 50.0, 50.0, datetime.now(timezone.utc) + timedelta(days=15), "active"))
         prediction = cursor.fetchone()
         prediction_id = prediction['id_prediction']
         

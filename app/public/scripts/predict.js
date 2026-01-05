@@ -62,7 +62,33 @@ function showBetRewardModal(bet) {
         `;
 
         openModal();
-        document.getElementById('pm-ok')?.addEventListener('click', closeModal, { once: true });
+        document.getElementById('pm-ok')?.addEventListener('click', async () => {
+            try {
+                const wallet = currentWallet || sessionStorage.getItem('wallet') || localStorage.getItem('wallet');
+                const signature = sessionStorage.getItem('signature') || '';
+                const message = sessionStorage.getItem('message') || '';
+
+                if (wallet && signature && message && bet && bet.bet_id) {
+                    const headers = {
+                        'X-Wallet': wallet,
+                        'X-Signature': signature,
+                        'X-Message': message,
+                        'Content-Type': 'application/json'
+                    };
+                    await fetch(`/api/predictions/claim/${bet.bet_id}`, {
+                        method: 'POST',
+                        headers,
+                        credentials: 'include'
+                    });
+                    bet.reward_claimed = true;
+                }
+            } catch (e) {
+                // ignore
+            } finally {
+                closeModal();
+                try { await loadUserBets(); } catch (e) {}
+            }
+        }, { once: true });
     } catch (e) {
         // If modal helpers are unavailable for any reason, silently ignore.
     }
@@ -339,8 +365,9 @@ async function loadUserBets() {
                         font-weight: bold;
                         background: ${bet.status === 'won' ? '#4CAF50' : bet.status === 'lost' ? '#f44336' : bet.status === 'pending' ? '#FFC107' : '#9aa0a6'};
                         color: #000;
-                    ">${statusText}</span>
+                    ">${statusText}</span>                    
                     ${bet.reward_issued ? '<span style="color: #4CAF50; margin-left: 10px; font-weight: bold;">✓ Reward issued</span>' : ''}
+                    ${bet.reward_issued && bet.reward_claimed ? '<span style="color: #9aa0a6; margin-left: 10px; font-weight: bold;">✓ Claimed</span>' : ''}
                 </div>
                 <div style="margin-top: 15px; color: #9aa0a6; font-size: 12px;">
                     Placed: ${new Date(bet.created_at).toLocaleString()}
