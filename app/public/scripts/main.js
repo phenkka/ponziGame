@@ -1230,6 +1230,44 @@ async function loadReferral() {
 
     const copyBtn = document.getElementById('ref-copy');
     if (copyBtn) copyBtn.onclick = async () => { try { await navigator.clipboard.writeText(link); showMessage('Referral link copied!', 'success'); } catch {} };
+
+    const rewardsRes = await fetch(`/api/referral/rewards/${wallet}?limit=1`);
+    const rewardsData = await rewardsRes.json();
+    if (rewardsData && rewardsData.success) {
+      const totalEarned = Number(rewardsData.totalEarned || 0);
+      const availableToClaim = Number(rewardsData.availableToClaim || 0);
+      const incomeEl = document.getElementById('ref-income');
+      if (incomeEl) incomeEl.textContent = `${totalEarned.toFixed(2)} $TOKENS`;
+      const claimAmountInput = document.getElementById('referral-claim-amount');
+      if (claimAmountInput) claimAmountInput.value = `${availableToClaim.toFixed(2)} $TOKENS`;
+
+      const claimBtn = document.getElementById('ref-claim');
+      if (claimBtn) {
+        claimBtn.disabled = availableToClaim <= 0;
+        claimBtn.onclick = async () => {
+          try {
+            claimBtn.disabled = true;
+            const cr = await fetch(`/api/referral/claim/${wallet}`, { method: 'POST' });
+            const cd = await cr.json();
+            if (cd && cd.success) {
+              const claimed = Number(cd.claimed || 0);
+              if (claimed > 0) {
+                showMessage(`Claimed: ${claimed.toFixed(2)} $TOKENS`, 'success');
+              } else {
+                showMessage('Nothing to claim.', 'success');
+              }
+              await loadReferral();
+            } else {
+              claimBtn.disabled = false;
+              showMessage('Failed to claim referral rewards.', 'error');
+            }
+          } catch {
+            claimBtn.disabled = false;
+            showMessage('Failed to claim referral rewards.', 'error');
+          }
+        };
+      }
+    }
   } catch {} 
 }
 

@@ -1520,6 +1520,13 @@ def setup_api_routes(app):
             total_row = cursor.fetchone()
             total_earned = float(total_row["total"]) if total_row and total_row.get("total") is not None else 0.0
 
+            cursor.execute(
+                "SELECT COALESCE(SUM(amount), 0) AS total FROM Referral_rewards WHERE id_referrer = %s AND claimed_at IS NULL",
+                (user["id_user"],)
+            )
+            available_row = cursor.fetchone()
+            available_to_claim = float(available_row["total"]) if available_row and available_row.get("total") is not None else 0.0
+
             cursor.execute("""
                 SELECT rr.id_reward, rr.id_purchase, rr.amount, rr.created_at,
                        u.wallet AS referred_wallet
@@ -1546,6 +1553,7 @@ def setup_api_routes(app):
             return {
                 "success": True,
                 "totalEarned": total_earned,
+                "availableToClaim": available_to_claim,
                 "count": len(normalized),
                 "rewards": normalized
             }
@@ -1556,6 +1564,52 @@ def setup_api_routes(app):
             return JSONResponse(
                 status_code=500,
                 content={"success": False, "error": "Failed to load referral rewards"}
+            )
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                conn.close()
+
+    @app.post("/api/referral/claim/{wallet}")
+    async def claim_referral_rewards(wallet: str, request: Request):
+        await _ensure_authorized_user(request, wallet)
+        conn = None
+        cursor = None
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+
+            cursor.execute("SELECT id_user FROM Users WHERE wallet = %s", (wallet,))
+            user = cursor.fetchone()
+            if not user:
+                raise HTTPException(status_code=404, detail="User not found")
+
+            cursor.execute(
+                "SELECT COALESCE(SUM(amount), 0) AS total FROM Referral_rewards WHERE id_referrer = %s AND claimed_at IS NULL",
+                (user["id_user"],)
+            )
+            row = cursor.fetchone()
+            claimed_amount = float(row["total"]) if row and row.get("total") is not None else 0.0
+
+            if claimed_amount > 0:
+                cursor.execute(
+                    "UPDATE Referral_rewards SET claimed_at = now() WHERE id_referrer = %s AND claimed_at IS NULL",
+                    (user["id_user"],)
+                )
+                conn.commit()
+
+            return {
+                "success": True,
+                "claimed": claimed_amount
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            print(f"Referral claim error: {e}")
+            return JSONResponse(
+                status_code=500,
+                content={"success": False, "error": "Failed to claim referral rewards"}
             )
         finally:
             if cursor:
