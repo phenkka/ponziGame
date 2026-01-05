@@ -273,6 +273,8 @@ def verify_solana_transaction(tx_signature: str, expected_sender: str, expected_
         
         # Для SPL token transfer нужно парсить инструкции
         actual_amount = 0.0
+        receiver_verified = False
+        amount_verified = False
         
         if mint_address:
             # Для SPL токенов парсим инструкции
@@ -308,6 +310,7 @@ def verify_solana_transaction(tx_signature: str, expected_sender: str, expected_
                                 
                                 # Конвертируем в float
                                 actual_amount = float(amount) / (10 ** decimals)
+                                amount_verified = True
                                 
                                 # Проверяем получателя
                                 destination = info.get("destination", "")
@@ -333,40 +336,46 @@ def verify_solana_transaction(tx_signature: str, expected_sender: str, expected_
                                 print(f"Found SPL token instruction (non-parsed) at index {idx}")
                                 # Для не-parsed формата сложнее, пока пропускаем проверку суммы
                                 actual_amount = expected_amount  # Временно принимаем ожидаемую сумму
+                                amount_verified = False
                                 break
                     
-                    # Если не нашли transferChecked, пробуем найти через pre/post token balances
-                    if actual_amount == 0.0:
-                        print("TransferChecked not found, trying to parse from token balances...")
-                        pre_token_balances = meta.get("preTokenBalances", [])
-                        post_token_balances = meta.get("postTokenBalances", [])
-                        print(f"Pre token balances: {len(pre_token_balances)}, Post token balances: {len(post_token_balances)}")
-                        
-                        # Вычисляем изменение баланса токенов для нужного mint
-                        # Ищем получателя в postTokenBalances и вычисляем разницу с preTokenBalances
-                        for post_bal in post_token_balances:
-                            if post_bal.get("mint") == mint_address:
-                                owner = post_bal.get("owner", "")
-                                account_index = post_bal.get("accountIndex")
-                                
-                                # Проверяем, что это получатель
-                                if owner == expected_receiver:
-                                    post_ui_amount = post_bal.get("uiTokenAmount", {})
-                                    post_amount = float(post_ui_amount.get("uiAmount", 0)) if post_ui_amount else 0
-                                    
-                                    # Ищем соответствующий pre баланс
-                                    pre_amount = 0
-                                    for pre_bal in pre_token_balances:
-                                        if (pre_bal.get("mint") == mint_address and 
-                                            pre_bal.get("accountIndex") == account_index):
-                                            pre_ui_amount = pre_bal.get("uiTokenAmount", {})
-                                            pre_amount = float(pre_ui_amount.get("uiAmount", 0)) if pre_ui_amount else 0
-                                            break
-                                    
-                                    # Вычисляем изменение (сколько получил получатель)
-                                    actual_amount = post_amount - pre_amount
-                                    print(f"Found amount from token balances: {actual_amount} (post: {post_amount}, pre: {pre_amount})")
-                                    break
+                    # Для SPL-токенов проверяем получателя и сумму через pre/post token balances.
+                    print("Trying to parse SPL token transfer from token balances...")
+                    pre_token_balances = meta.get("preTokenBalances", [])
+                    post_token_balances = meta.get("postTokenBalances", [])
+                    print(f"Pre token balances: {len(pre_token_balances)}, Post token balances: {len(post_token_balances)}")
+
+                    # Вычисляем изменение баланса токенов для нужного mint у владельца expected_receiver.
+                    for post_bal in post_token_balances:
+                        if post_bal.get("mint") != mint_address:
+                            continue
+
+                        owner = post_bal.get("owner", "")
+                        if owner != expected_receiver:
+                            continue
+
+                        account_index = post_bal.get("accountIndex")
+                        post_ui_amount = post_bal.get("uiTokenAmount", {})
+                        post_amount = float(post_ui_amount.get("uiAmount", 0)) if post_ui_amount else 0
+
+                        pre_amount = 0.0
+                        for pre_bal in pre_token_balances:
+                            if pre_bal.get("mint") != mint_address:
+                                continue
+                            if pre_bal.get("accountIndex") != account_index:
+                                continue
+                            pre_ui_amount = pre_bal.get("uiTokenAmount", {})
+                            pre_amount = float(pre_ui_amount.get("uiAmount", 0)) if pre_ui_amount else 0
+                            break
+
+                        actual_amount = post_amount - pre_amount
+                        receiver_verified = True
+                        amount_verified = True
+                        print(f"Found amount from token balances: {actual_amount} (post: {post_amount}, pre: {pre_amount})")
+                        break
+
+                    if not receiver_verified:
+                        return {"valid": False, "error": "Receiver mismatch: token balances do not show transfer to expected receiver"}
         else:
             # Для SOL transfer проверяем балансы
             pre_balances = meta.get("preBalances", [])
@@ -374,15 +383,26 @@ def verify_solana_transaction(tx_signature: str, expected_sender: str, expected_
             
             # Ищем изменение баланса получателя
             for i, key in enumerate(account_keys):
-                if key.get("pubkey") == expected_receiver:
+                if isinstance(key, dict):
+                    pk = key.get("pubkey")
+                elif isinstance(key, str):
+                    pk = key
+                else:
+                    pk = str(key)
+
+                if pk == expected_receiver:
+                    receiver_verified = True
                     if i < len(pre_balances) and i < len(post_balances):
                         actual_amount = (post_balances[i] - pre_balances[i]) / 1e9  # lamports to SOL
-                        break
-        
-        # Если сумма не найдена, но транзакция валидна, принимаем ожидаемую сумму
-        if actual_amount == 0.0 and expected_amount > 0:
-            print(f"WARNING: Could not parse amount from transaction, using expected amount: {expected_amount}")
-            actual_amount = expected_amount
+                        amount_verified = True
+                    break
+
+            if not receiver_verified:
+                return {"valid": False, "error": "Receiver mismatch: expected receiver not found in transaction accounts"}
+
+        # Если сумму не удалось определить, отклоняем транзакцию.
+        if expected_amount > 0 and (actual_amount == 0.0 or not amount_verified):
+            return {"valid": False, "error": "Could not determine transferred amount from transaction"}
         
         # Проверяем сумму (для SPL токенов допускаем небольшую погрешность)
         if expected_amount > 0:

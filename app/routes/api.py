@@ -1125,7 +1125,10 @@ def setup_api_routes(app):
             cursor = conn.cursor(cursor_factory=RealDictCursor)
             
             # Проверяем, что транзакция не использовалась ранее
-            cursor.execute("SELECT id_purchase FROM Chest_purchases WHERE tx_signature = %s", (tx_signature,))
+            cursor.execute(
+                "SELECT id_purchase FROM Chest_purchases WHERE tx_signature = %s OR tx_signature LIKE %s",
+                (tx_signature, f"{tx_signature}_%")
+            )
             existing = cursor.fetchone()
             if existing:
                 cursor.close()

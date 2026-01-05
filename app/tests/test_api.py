@@ -753,27 +753,92 @@ class TestChestPurchaseAPI:
             """, (tx_signature,))
             purchase = cursor.fetchone()
             cursor.close()
-            
+
             assert purchase is not None
             assert purchase[1] == user_id  # id_user
             assert purchase[2] == chest_id  # id_chest
             assert purchase[3] == tx_signature  # tx_signature
             assert purchase[4] is False  # is_opened
-    
+
+    @pytest.mark.asyncio
+    @patch('routes.api.verify_solana_transaction')
+    async def test_buy_multiple_chests_duplicate_base_signature_is_blocked(self, mock_verify_tx, clean_db, db_connection):
+        if db_connection is None:
+            pytest.skip("Database not available")
+
+        signing_key = SigningKey.generate()
+        verify_key = signing_key.verify_key
+        wallet_address = base58.b58encode(verify_key.encode()).decode('utf-8')
+
+        cursor = db_connection.cursor()
+        cursor.execute(
+            "INSERT INTO Users (wallet, ref_code) VALUES (%s, %s) RETURNING id_user",
+            (wallet_address, "TESTCODE_QTY_DUP")
+        )
+        user_id = cursor.fetchone()[0]
+
+        cursor.execute("""
+            INSERT INTO Chests (prob_common, prob_rare, prob_epic, prob_legendary, chance_loss, price)
+            VALUES (80, 12, 7, 1, 0, 100)
+            RETURNING id_chest
+        """)
+        chest_id = cursor.fetchone()[0]
+        db_connection.commit()
+        cursor.close()
+
+        message = "Gamba Auth: 1234567890"
+        signed = signing_key.sign(message.encode('utf-8'))
+        signature_list = list(signed.signature)
+
+        headers = {
+            "X-Wallet": wallet_address,
+            "X-Signature": json.dumps(signature_list),
+            "X-Message": message
+        }
+
+        base_sig = "multi_replay_sig_123"
+        cursor = db_connection.cursor()
+        cursor.execute(
+            "INSERT INTO Chest_purchases (id_user, id_chest, tx_signature) VALUES (%s, %s, %s)",
+            (user_id, chest_id, f"{base_sig}_0")
+        )
+        db_connection.commit()
+        cursor.close()
+
+        mock_verify_tx.return_value = {
+            "valid": True,
+            "actual_amount": 100.0,
+            "sender": wallet_address
+        }
+
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            resp = await client.post(
+                "/api/chests/buy",
+                json={
+                    "wallet": wallet_address,
+                    "id_chest": chest_id,
+                    "txSignature": base_sig,
+                    "quantity": 2
+                },
+                headers=headers
+            )
+            assert resp.status_code == 400
+            data = resp.json()
+            assert data["success"] is False
+            assert "Transaction already used" in data["error"]
+            mock_verify_tx.assert_not_called()
+
     @pytest.mark.asyncio
     @patch('routes.api.verify_solana_transaction')
     async def test_buy_chest_invalid_transaction(self, mock_verify_tx, clean_db, db_connection):
-        """Проверяет обработку невалидной транзакции"""
         if db_connection is None:
             pytest.skip("Database not available")
         
-        # Мокируем неуспешную верификацию транзакции
         mock_verify_tx.return_value = {
             "valid": False,
             "error": "Transaction verification failed: Invalid signature"
         }
         
-        # Создаем пользователя и пак
         signing_key = SigningKey.generate()
         verify_key = signing_key.verify_key
         wallet_address = base58.b58encode(verify_key.encode()).decode('utf-8')
@@ -813,7 +878,6 @@ class TestChestPurchaseAPI:
                 },
                 headers=headers
             )
-            # Если вернулся 500, выводим ошибку для отладки
             if response.status_code == 500:
                 data = response.json()
                 print(f"Error in test_buy_chest_invalid_transaction: {data.get('error', 'Unknown error')}")
@@ -823,13 +887,146 @@ class TestChestPurchaseAPI:
             assert "Transaction verification failed" in data["error"]
 
 
+class TestSolanaTransactionVerification:
+    @patch('core.utils.requests.post')
+    def test_verify_solana_transaction_spl_requires_receiver_in_token_balances(self, mock_post):
+        from core.utils import verify_solana_transaction
+
+        status_resp = MagicMock()
+        status_resp.status_code = 200
+        status_resp.json.return_value = {"result": [None]}
+
+        tx_resp = MagicMock()
+        tx_resp.status_code = 200
+        tx_resp.json.return_value = {
+            "result": {
+                "meta": {
+                    "err": None,
+                    "status": {"Ok": None},
+                    "preTokenBalances": [
+                        {"mint": "MINT", "owner": "OTHER", "accountIndex": 1, "uiTokenAmount": {"uiAmount": 0}}
+                    ],
+                    "postTokenBalances": [
+                        {"mint": "MINT", "owner": "OTHER", "accountIndex": 1, "uiTokenAmount": {"uiAmount": 10}}
+                    ]
+                },
+                "transaction": {
+                    "message": {
+                        "accountKeys": ["SENDER"],
+                        "instructions": []
+                    }
+                }
+            }
+        }
+
+        mock_post.side_effect = [status_resp, tx_resp]
+
+        r = verify_solana_transaction(
+            tx_signature="SIG",
+            expected_sender="SENDER",
+            expected_receiver="RECEIVER",
+            expected_amount=10.0,
+            rpc_url="http://rpc",
+            mint_address="MINT"
+        )
+        assert r["valid"] is False
+        assert "Receiver mismatch" in r["error"]
+
+    @patch('core.utils.requests.post')
+    def test_verify_solana_transaction_spl_requires_amount_determined(self, mock_post):
+        from core.utils import verify_solana_transaction
+
+        status_resp = MagicMock()
+        status_resp.status_code = 200
+        status_resp.json.return_value = {"result": [None]}
+
+        tx_resp = MagicMock()
+        tx_resp.status_code = 200
+        tx_resp.json.return_value = {
+            "result": {
+                "meta": {
+                    "err": None,
+                    "status": {"Ok": None},
+                    "preTokenBalances": [
+                        {"mint": "MINT", "owner": "RECEIVER", "accountIndex": 1, "uiTokenAmount": {"uiAmount": 0}}
+                    ],
+                    "postTokenBalances": [
+                        {"mint": "MINT", "owner": "RECEIVER", "accountIndex": 1, "uiTokenAmount": {"uiAmount": 0}}
+                    ]
+                },
+                "transaction": {
+                    "message": {
+                        "accountKeys": ["SENDER"],
+                        "instructions": []
+                    }
+                }
+            }
+        }
+
+        mock_post.side_effect = [status_resp, tx_resp]
+
+        r = verify_solana_transaction(
+            tx_signature="SIG",
+            expected_sender="SENDER",
+            expected_receiver="RECEIVER",
+            expected_amount=10.0,
+            rpc_url="http://rpc",
+            mint_address="MINT"
+        )
+        assert r["valid"] is False
+        assert "Could not determine transferred amount" in r["error"]
+
+    @patch('core.utils.requests.post')
+    def test_verify_solana_transaction_spl_success_from_token_balances(self, mock_post):
+        from core.utils import verify_solana_transaction
+
+        status_resp = MagicMock()
+        status_resp.status_code = 200
+        status_resp.json.return_value = {"result": [None]}
+
+        tx_resp = MagicMock()
+        tx_resp.status_code = 200
+        tx_resp.json.return_value = {
+            "result": {
+                "meta": {
+                    "err": None,
+                    "status": {"Ok": None},
+                    "preTokenBalances": [
+                        {"mint": "MINT", "owner": "RECEIVER", "accountIndex": 1, "uiTokenAmount": {"uiAmount": 0}}
+                    ],
+                    "postTokenBalances": [
+                        {"mint": "MINT", "owner": "RECEIVER", "accountIndex": 1, "uiTokenAmount": {"uiAmount": 10}}
+                    ]
+                },
+                "transaction": {
+                    "message": {
+                        "accountKeys": ["SENDER"],
+                        "instructions": []
+                    }
+                }
+            }
+        }
+
+        mock_post.side_effect = [status_resp, tx_resp]
+
+        r = verify_solana_transaction(
+            tx_signature="SIG",
+            expected_sender="SENDER",
+            expected_receiver="RECEIVER",
+            expected_amount=10.0,
+            rpc_url="http://rpc",
+            mint_address="MINT"
+        )
+        assert r["valid"] is True
+        assert r["sender"] == "SENDER"
+        assert abs(r["actual_amount"] - 10.0) < 1e-9
+
+
 class TestChestPurchaseQuantity:
-    """Тесты для покупки нескольких паков и защиты от обхода оплаты"""
     
     @pytest.mark.asyncio
     @patch('routes.api.verify_solana_transaction')
     async def test_buy_multiple_chests_success(self, mock_verify_tx, clean_db, db_connection):
-        """Проверяет успешную покупку нескольких паков с правильной суммой"""
         if db_connection is None:
             pytest.skip("Database not available")
         
@@ -924,7 +1121,6 @@ class TestChestPurchaseQuantity:
     @pytest.mark.asyncio
     @patch('routes.api.verify_solana_transaction')
     async def test_buy_multiple_chests_wrong_amount(self, mock_verify_tx, clean_db, db_connection):
-        """Проверяет, что нельзя купить много паков за меньшую стоимость"""
         if db_connection is None:
             pytest.skip("Database not available")
         
