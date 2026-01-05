@@ -114,6 +114,7 @@ def clean_db(db_connection):
         # Удаляем в правильном порядке: сначала дочерние таблицы, потом родительские
         # НЕ удаляем Chests и Cards - это справочные данные, которые должны быть всегда
         cursor.execute("DELETE FROM Chest_openings")
+        cursor.execute("DELETE FROM Referral_rewards")
         cursor.execute("DELETE FROM Chest_purchases")
         cursor.execute("DELETE FROM Card_trades")  # Очищаем историю трейдов
         cursor.execute("DELETE FROM Card_User")
@@ -152,6 +153,7 @@ def clean_db(db_connection):
     cursor = db_connection.cursor()
     try:
         cursor.execute("DELETE FROM Chest_openings")
+        cursor.execute("DELETE FROM Referral_rewards")
         cursor.execute("DELETE FROM Chest_purchases")
         cursor.execute("DELETE FROM Card_trades")  # Очищаем историю трейдов
         cursor.execute("DELETE FROM Card_User")

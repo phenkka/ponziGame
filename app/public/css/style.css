@@ -536,18 +536,11 @@ body:not(.page-home) .page {
 }
 
 .distribution-rules {
-    display: flex;
-    gap: 60px;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 300px));
+    gap: 20px 60px;
     justify-content: center;
-    align-items: flex-start;
-}
-
-.rule-column {
-    display: flex;
-    flex-direction: column;
-    gap: 20px;
-    flex: 1;
-    max-width: 300px;
+    align-items: start;
 }
 
 .rule-item {
@@ -596,16 +589,11 @@ body:not(.page-home) .page {
     }
     
     .distribution-rules {
-        flex-direction: column;
+        grid-template-columns: 1fr;
         gap: 20px;
-        align-items: center;
+        justify-items: center;
     }
-    
-    .rule-column {
-        max-width: 100%;
-        width: 100%;
-    }
-    
+
     .rule-item {
         padding: 12px 16px;
     }

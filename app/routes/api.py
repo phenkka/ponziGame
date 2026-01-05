@@ -1203,13 +1203,31 @@ def setup_api_routes(app):
                 if purchase:
                     purchase_ids.append(purchase['id_purchase'])
             
-            # Добавляем 10% от общей суммы в джекпот
-            jackpot_contribution = total_price * 0.1
+            # Добавляем 40% от общей суммы в джекпот
+            jackpot_contribution = total_price * 0.4
             add_to_jackpot(cursor, conn, jackpot_contribution)
             
-            # Добавляем 5% от общей суммы в супер джекпот
-            super_jackpot_contribution = total_price * 0.05
+            # Добавляем 10% от общей суммы в супер джекпот
+            super_jackpot_contribution = total_price * 0.1
             add_to_super_jackpot(cursor, conn, super_jackpot_contribution)
+
+            # Реферальная программа: 10% от суммы покупок приглашенного пользователя
+            # (начисляем как запись в Referral_rewards, если пользователь был приглашен)
+            cursor.execute("""
+                SELECT id_referrer
+                FROM Referral_system
+                WHERE id_referred = %s
+            """, (user['id_user'],))
+            referral_row = cursor.fetchone()
+            if referral_row and purchase_ids:
+                referrer_id = referral_row['id_referrer']
+                referral_per_purchase = price * 0.1
+                for pid in purchase_ids:
+                    cursor.execute("""
+                        INSERT INTO Referral_rewards (id_referrer, id_referred, id_purchase, amount)
+                        VALUES (%s, %s, %s, %s)
+                        ON CONFLICT (id_purchase) DO NOTHING
+                    """, (referrer_id, user['id_user'], pid, referral_per_purchase))
             
             conn.commit()
             
@@ -1472,6 +1490,72 @@ def setup_api_routes(app):
             return JSONResponse(
                 status_code=500,
                 content={"success": False, "error": "Failed to load checkin status"}
+            )
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                conn.close()
+
+    @app.get("/api/referral/rewards/{wallet}")
+    async def get_referral_rewards(wallet: str, request: Request, limit: int = 50):
+        await _ensure_authorized_user(request, wallet)
+        conn = None
+        cursor = None
+        try:
+            limit = max(1, min(int(limit), 200))
+
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+
+            cursor.execute("SELECT id_user FROM Users WHERE wallet = %s", (wallet,))
+            user = cursor.fetchone()
+            if not user:
+                raise HTTPException(status_code=404, detail="User not found")
+
+            cursor.execute(
+                "SELECT COALESCE(SUM(amount), 0) AS total FROM Referral_rewards WHERE id_referrer = %s",
+                (user["id_user"],)
+            )
+            total_row = cursor.fetchone()
+            total_earned = float(total_row["total"]) if total_row and total_row.get("total") is not None else 0.0
+
+            cursor.execute("""
+                SELECT rr.id_reward, rr.id_purchase, rr.amount, rr.created_at,
+                       u.wallet AS referred_wallet
+                FROM Referral_rewards rr
+                JOIN Users u ON u.id_user = rr.id_referred
+                WHERE rr.id_referrer = %s
+                ORDER BY rr.created_at DESC, rr.id_reward DESC
+                LIMIT %s
+            """, (user["id_user"], limit))
+            rewards = cursor.fetchall() or []
+
+            normalized = []
+            for r in rewards:
+                d = dict(r)
+                if d.get("created_at") is not None:
+                    try:
+                        d["created_at"] = d["created_at"].isoformat()
+                    except Exception:
+                        pass
+                if d.get("amount") is not None:
+                    d["amount"] = float(d["amount"])
+                normalized.append(d)
+
+            return {
+                "success": True,
+                "totalEarned": total_earned,
+                "count": len(normalized),
+                "rewards": normalized
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            print(f"Referral rewards error: {e}")
+            return JSONResponse(
+                status_code=500,
+                content={"success": False, "error": "Failed to load referral rewards"}
             )
         finally:
             if cursor:
