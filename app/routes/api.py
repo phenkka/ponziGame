@@ -1324,6 +1324,7 @@ def setup_api_routes(app):
                 JOIN Users u ON cp.id_user = u.id_user
                 JOIN Chests c ON cp.id_chest = c.id_chest
                 WHERE cp.id_purchase = %s AND u.wallet = %s
+                FOR UPDATE OF cp
             """, (id_purchase, wallet))
             
             purchase_data = cursor.fetchone()
@@ -1358,14 +1359,27 @@ def setup_api_routes(app):
                 cursor.execute("""
                     UPDATE Chest_purchases
                     SET is_opened = TRUE, opened_at = NOW()
-                    WHERE id_purchase = %s
+                    WHERE id_purchase = %s AND is_opened = FALSE
+                    RETURNING id_purchase
                 """, (id_purchase,))
+                updated = cursor.fetchone()
+                if not updated:
+                    conn.rollback()
+                    cursor.close()
+                    conn.close()
+                    return JSONResponse(
+                        status_code=400,
+                        content={"success": False, "error": "Pack already opened"}
+                    )
                 
                 # Записываем в Chest_openings
                 cursor.execute("""
                     INSERT INTO Chest_openings (id_purchase, id_user, id_chest)
-                    VALUES (%s, %s, %s)
-                """, (id_purchase, purchase_data['id_user'], purchase_data['id_chest']))
+                    SELECT %s, %s, %s
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM Chest_openings WHERE id_purchase = %s
+                    )
+                """, (id_purchase, purchase_data['id_user'], purchase_data['id_chest'], id_purchase))
                 
                 conn.commit()
                 cursor.close()
@@ -1392,17 +1406,38 @@ def setup_api_routes(app):
             cursor.execute("""
                 UPDATE Chest_purchases
                 SET is_opened = TRUE, opened_at = NOW()
-                WHERE id_purchase = %s
+                WHERE id_purchase = %s AND is_opened = FALSE
+                RETURNING id_purchase
             """, (id_purchase,))
+            updated = cursor.fetchone()
+            if not updated:
+                conn.rollback()
+                cursor.close()
+                conn.close()
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "error": "Pack already opened"}
+                )
             
             # Записываем в Chest_openings и получаем id_opening
             cursor.execute("""
                 INSERT INTO Chest_openings (id_purchase, id_user, id_chest)
-                VALUES (%s, %s, %s)
+                SELECT %s, %s, %s
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM Chest_openings WHERE id_purchase = %s
+                )
                 RETURNING id_opening
-            """, (id_purchase, purchase_data['id_user'], purchase_data['id_chest']))
+            """, (id_purchase, purchase_data['id_user'], purchase_data['id_chest'], id_purchase))
             opening_data = cursor.fetchone()
-            id_opening = opening_data['id_opening'] if opening_data else None
+            if opening_data and opening_data.get('id_opening') is not None:
+                id_opening = opening_data['id_opening']
+            else:
+                cursor.execute(
+                    "SELECT id_opening FROM Chest_openings WHERE id_purchase = %s",
+                    (id_purchase,)
+                )
+                existing_opening = cursor.fetchone()
+                id_opening = existing_opening['id_opening'] if existing_opening else None
             
             # Добавляем карту пользователю (или увеличиваем quantity если уже есть)
             # Связываем карту с открытием пака через id_opening

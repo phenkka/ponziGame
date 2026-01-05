@@ -1,4 +1,5 @@
 import pytest
+import asyncio
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -42,7 +43,7 @@ class TestChestOpeningAPI:
         )
         db_connection.commit()
         cursor.close()
-        
+
         async with AsyncClient(app=app, base_url="http://test") as client:
             response = await client.post(
                 "/api/chests/open",
@@ -53,6 +54,151 @@ class TestChestOpeningAPI:
             data = response.json()
             assert data["success"] is False
             assert "not found" in data["error"].lower()
+
+    @pytest.mark.asyncio
+    @patch('routes.api.get_random_card_by_rarity')
+    @patch('routes.api.determine_card_rarity')
+    async def test_open_chest_double_open_does_not_duplicate_rewards(self, mock_determine_rarity, mock_get_card, clean_db, db_connection, auth_headers):
+        if db_connection is None:
+            pytest.skip("Database not available")
+
+        wallet = auth_headers["X-Wallet"]
+
+        cursor = db_connection.cursor(cursor_factory=RealDictCursor)
+        cursor.execute(
+            "INSERT INTO Users (wallet, ref_code) VALUES (%s, %s) RETURNING id_user",
+            (wallet, f"TESTCODE_DOUBLEOPEN_{wallet[:8]}")
+        )
+        user_id = cursor.fetchone()["id_user"]
+
+        cursor.execute("""
+            INSERT INTO Chests (prob_common, prob_rare, prob_epic, prob_legendary, chance_loss, price)
+            VALUES (100, 0, 0, 0, 0, 100)
+            RETURNING id_chest
+        """)
+        chest_id = cursor.fetchone()["id_chest"]
+
+        cursor.execute(
+            "INSERT INTO Cards (rarity, start_bounty, name, image_key, image_url) VALUES (%s, %s, %s, %s, 'img/cards/test.png') RETURNING id_card",
+            ("basic", 10, "Test Basic Card", f"TEST_DOUBLEOPEN_{wallet[:8]}")
+        )
+        card_id = cursor.fetchone()["id_card"]
+
+        cursor.execute("""
+            INSERT INTO Chest_purchases (id_user, id_chest, tx_signature)
+            VALUES (%s, %s, %s)
+            RETURNING id_purchase
+        """, (user_id, chest_id, f"test_tx_signature_doubleopen_{wallet[:8]}"))
+        purchase_id = cursor.fetchone()["id_purchase"]
+        db_connection.commit()
+        cursor.close()
+
+        mock_determine_rarity.return_value = "basic"
+        mock_get_card.return_value = {"id_card": card_id, "start_bounty": 10, "name": "Test Basic Card", "image_url": "img/cards/test.png"}
+
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            resp1 = await client.post(
+                "/api/chests/open",
+                json={"wallet": wallet, "id_purchase": purchase_id},
+                headers=auth_headers
+            )
+            assert resp1.status_code == 200
+
+            resp2 = await client.post(
+                "/api/chests/open",
+                json={"wallet": wallet, "id_purchase": purchase_id},
+                headers=auth_headers
+            )
+            assert resp2.status_code == 400
+            data2 = resp2.json()
+            assert data2["success"] is False
+            assert "already opened" in data2["error"].lower()
+
+        cursor = db_connection.cursor(cursor_factory=RealDictCursor)
+        cursor.execute("SELECT COUNT(*) AS cnt FROM Chest_openings WHERE id_purchase = %s", (purchase_id,))
+        openings_cnt = cursor.fetchone()["cnt"]
+        assert openings_cnt == 1
+
+        cursor.execute(
+            "SELECT quantity FROM Card_User WHERE id_user = %s AND id_card = %s",
+            (user_id, card_id)
+        )
+        cu = cursor.fetchone()
+        assert cu is not None
+        assert cu["quantity"] == 1
+        cursor.close()
+
+    @pytest.mark.asyncio
+    @patch('routes.api.get_random_card_by_rarity')
+    @patch('routes.api.determine_card_rarity')
+    async def test_open_chest_concurrent_requests_only_one_succeeds(self, mock_determine_rarity, mock_get_card, clean_db, db_connection, auth_headers):
+        if db_connection is None:
+            pytest.skip("Database not available")
+
+        wallet = auth_headers["X-Wallet"]
+
+        cursor = db_connection.cursor(cursor_factory=RealDictCursor)
+        cursor.execute(
+            "INSERT INTO Users (wallet, ref_code) VALUES (%s, %s) RETURNING id_user",
+            (wallet, f"TESTCODE_CONCURRENT_{wallet[:8]}")
+        )
+        user_id = cursor.fetchone()["id_user"]
+
+        cursor.execute("""
+            INSERT INTO Chests (prob_common, prob_rare, prob_epic, prob_legendary, chance_loss, price)
+            VALUES (100, 0, 0, 0, 0, 100)
+            RETURNING id_chest
+        """)
+        chest_id = cursor.fetchone()["id_chest"]
+
+        cursor.execute(
+            "INSERT INTO Cards (rarity, start_bounty, name, image_key, image_url) VALUES (%s, %s, %s, %s, 'img/cards/test.png') RETURNING id_card",
+            ("basic", 10, "Test Basic Card", f"TEST_CONCURRENT_{wallet[:8]}")
+        )
+        card_id = cursor.fetchone()["id_card"]
+
+        cursor.execute("""
+            INSERT INTO Chest_purchases (id_user, id_chest, tx_signature)
+            VALUES (%s, %s, %s)
+            RETURNING id_purchase
+        """, (user_id, chest_id, f"test_tx_signature_concurrent_{wallet[:8]}"))
+        purchase_id = cursor.fetchone()["id_purchase"]
+        db_connection.commit()
+        cursor.close()
+
+        mock_determine_rarity.return_value = "basic"
+        mock_get_card.return_value = {"id_card": card_id, "start_bounty": 10, "name": "Test Basic Card", "image_url": "img/cards/test.png"}
+
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            r1, r2 = await asyncio.gather(
+                client.post(
+                    "/api/chests/open",
+                    json={"wallet": wallet, "id_purchase": purchase_id},
+                    headers=auth_headers
+                ),
+                client.post(
+                    "/api/chests/open",
+                    json={"wallet": wallet, "id_purchase": purchase_id},
+                    headers=auth_headers
+                )
+            )
+
+            codes = sorted([r1.status_code, r2.status_code])
+            assert codes == [200, 400]
+
+        cursor = db_connection.cursor(cursor_factory=RealDictCursor)
+        cursor.execute("SELECT COUNT(*) AS cnt FROM Chest_openings WHERE id_purchase = %s", (purchase_id,))
+        openings_cnt = cursor.fetchone()["cnt"]
+        assert openings_cnt == 1
+
+        cursor.execute(
+            "SELECT quantity FROM Card_User WHERE id_user = %s AND id_card = %s",
+            (user_id, card_id)
+        )
+        cu = cursor.fetchone()
+        assert cu is not None
+        assert cu["quantity"] == 1
+        cursor.close()
     
     @pytest.mark.asyncio
     async def test_open_chest_already_opened(self, clean_db, db_connection, auth_headers):
