@@ -88,6 +88,43 @@ function initBattlePage() {
     }
 }
 
+// Initialize clash page when loaded
+function initClashPage() {
+    console.log('Clash page loaded');
+    
+    // Check if user is authenticated
+    const storedWallet = sessionStorage.getItem('wallet');
+    console.log('Stored wallet:', storedWallet);
+    
+    if (storedWallet) {
+        // User is authenticated, show user info and load clash content
+        fetch(`/api/user/${storedWallet}`).then(r => r.json()).then(d => { 
+            console.log('User data:', d);
+            if (d && d.success) {
+                showUserInfo(storedWallet, d.user.ref_code, { redirect: false });
+                loadJackpot(); // Load jackpot info
+                loadSuperJackpot(); // Load super jackpot info
+                
+                // Initialize clash game system
+                if (typeof window.initClashPage === 'function') {
+                    window.initClashPage();
+                } else {
+                    // Fallback if clash.js hasn't loaded yet
+                    setTimeout(() => {
+                        if (typeof window.initClashPage === 'function') {
+                            window.initClashPage();
+                        }
+                    }, 500);
+                }
+            }
+        }).catch(e => console.error('Error loading user data:', e));
+    } else {
+        console.log('User not authenticated, redirecting to home...');
+        // User not authenticated, redirect to home
+        window.location.href = '/';
+    }
+}
+
 // Initialize cards page when loaded
 function initCardsPage() {
     console.log('Cards page loaded');
@@ -228,6 +265,8 @@ document.addEventListener('DOMContentLoaded', () => {
         initShopPage();
     } else if (currentPath === '/battle' || currentPage.includes('page-battle')) {
         initBattlePage();
+    } else if (currentPath === '/clash' || currentPage.includes('page-clash')) {
+        initClashPage();
     } else if (currentPath === '/cards' || currentPage.includes('page-cards')) {
         initCardsPage();
     } else if (currentPath === '/profile' || currentPage.includes('page-profile')) {

@@ -1250,11 +1250,11 @@ async function loadSuperJackpot() {
       const amountEls = [
         document.getElementById('superj-amount'),           // home
         document.getElementById('superj-amount-shop'),      // shop
-        document.getElementById('superj-amount-cards'),      // cards
-        document.getElementById('superj-amount-battle'),     // battle
-        document.getElementById('superj-amount-ref'),        // referral
-        document.getElementById('superj-amount-rules'),      // rules
-        document.getElementById('superj-amount-predict')     // predict
+        document.getElementById('superj-amount-cards'),     // cards
+        document.getElementById('superj-amount-battle'),    // battle
+        document.getElementById('superj-amount-ref'),       // referral
+        document.getElementById('superj-amount-rules'),     // rules
+        document.getElementById('superj-amount-predict'),   // predict
       ];
       
       amountEls.forEach(el => {
@@ -1279,7 +1279,7 @@ async function loadSuperJackpot() {
         document.getElementById('superj-amount-battle'),
         document.getElementById('superj-amount-ref'),
         document.getElementById('superj-amount-rules'),
-        document.getElementById('superj-amount-predict')
+        document.getElementById('superj-amount-predict'),
       ];
       amountEls.forEach(el => {
         if (el) el.textContent = '0 $TOKENS';
@@ -1294,7 +1294,7 @@ async function loadSuperJackpot() {
       document.getElementById('superj-amount-cards'),
       document.getElementById('superj-amount-battle'),
       document.getElementById('superj-amount-ref'),
-      document.getElementById('superj-amount-rules')
+      document.getElementById('superj-amount-rules'),
     ];
     amountEls.forEach(el => {
       if (el) el.textContent = '0 $TOKENS';
@@ -1421,7 +1421,6 @@ async function loadPacks(forShop = false) {
         <img src="img/${packImage}" alt="Pack ${chest.id_chest}" class="pack-image">
         <div class="pack-card">
           <div class="pack-name">${getPackLabel(chest.id_chest)}</div>
-          <!-- Закомментирована информация о паках
           <div class="pack-price">PRICE: ${Number(chest.price).toString()} $TOKENS</div>
           <div class="pack-rates">CARD DROP RATES: Common: ${chest.prob_common}%; Rare: ${chest.prob_rare}%; Epic: ${chest.prob_epic}%; Legendary: ${chest.prob_legendary}%${chest.chance_loss > 0 ? `; Loss: ${chest.chance_loss}%` : ''}</div>
           <div class="pack-quantity-selector">
@@ -1432,15 +1431,14 @@ async function loadPacks(forShop = false) {
             </div>
             <div class="quantity-total" data-id="${chest.id_chest}">Total: ${Number(chest.price).toString()} $TOKENS</div>
           </div>
-          -->
-          <button class="pack-buy-btn" data-id="${chest.id_chest}">Soon</button>
+          <button class="pack-buy-btn" data-id="${chest.id_chest}">${currentWallet ? 'Buy' : 'Connect Wallet'}</button>
         </div>
       `;
       container.appendChild(el);
     });
     // Removed price increase info block on shop page per request
     // Закомментировано - кнопка теперь показывает "Soon" и не работает
-    // container.querySelectorAll('.pack-buy-btn').forEach(btn => btn.addEventListener('click', async () => { if (!currentWallet) { await connectWallet(); return; } const id = btn.getAttribute('data-id'); await purchaseChest(id, data.chests); }));
+    container.querySelectorAll('.pack-buy-btn').forEach(btn => btn.addEventListener('click', async () => { if (!currentWallet) { await connectWallet(); return; } const id = btn.getAttribute('data-id'); await purchaseChest(id, data.chests); }));
     
     // Добавляем обработчики для кнопок количества
     container.querySelectorAll('.quantity-plus').forEach(btn => {
@@ -1490,9 +1488,10 @@ async function loadPacks(forShop = false) {
 }
 
 function updatePackButtons() {
-  // Закомментировано - кнопки теперь всегда показывают "Soon"
-  // const packButtons = document.querySelectorAll('.pack-buy-btn');
-  // packButtons.forEach(btn => { btn.textContent = currentWallet ? 'Buy' : 'Connect Phantom wallet'; });
+  const packButtons = document.querySelectorAll('.pack-buy-btn');
+  packButtons.forEach(btn => { 
+    btn.textContent = currentWallet ? 'Buy' : 'Connect Wallet';
+  });
 }
 
 function updateQuantityTotal(id, price, container) {
