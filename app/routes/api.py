@@ -2607,6 +2607,9 @@ def setup_api_routes(app):
                     ub.id_prediction,
                     ub.chosen_outcome,
                     ub.status,
+                    ub.reward_issued,
+                    ub.reward_type,
+                    ub.reward_data,
                     ub.created_at,
                     ub.resolved_at,
                     p.title,
@@ -2638,6 +2641,9 @@ def setup_api_routes(app):
                     "outcome_a_probability": float(bet['outcome_a_probability']) if bet['outcome_a_probability'] else 50.0,
                     "outcome_b_probability": float(bet['outcome_b_probability']) if bet['outcome_b_probability'] else 50.0,
                     "status": bet['status'],
+                    "reward_issued": bool(bet.get('reward_issued')),
+                    "reward_type": bet.get('reward_type'),
+                    "reward_data": bet.get('reward_data'),
                     "prediction_status": bet['prediction_status'],
                     "winner_outcome": bet['winner_outcome'],
                     "created_at": str(bet['created_at']),
@@ -2666,17 +2672,36 @@ def setup_api_routes(app):
         """Разрешить пари (установить победителя)"""
         try:
             # Проверяем авторизацию (только админ может разрешать)
-            # Пока разрешаем всем авторизованным (можно добавить проверку роли)
             x_wallet = request.headers.get("X-Wallet")
             x_signature = request.headers.get("X-Signature")
             x_message = request.headers.get("X-Message")
-            
-            if not x_wallet or not x_signature or not x_message:
+
+            auth_wallet = None
+            if x_wallet and x_signature and x_message:
+                auth_data = await verify_auth(
+                    x_wallet=x_wallet,
+                    x_signature=x_signature,
+                    x_message=x_message
+                )
+                auth_wallet = auth_data.get("wallet")
+            else:
                 auth_token = request.cookies.get("auth_token")
                 if not auth_token:
                     return JSONResponse(
                         status_code=401,
                         content={"success": False, "error": "Unauthorized"}
+                    )
+                from core.sessions import verify_session_cookie
+                auth_data = await verify_session_cookie(request)
+                auth_wallet = auth_data.get("wallet")
+
+            admins_env = os.getenv("PREDICTIONS_RESOLVE_ADMINS", "").strip()
+            if admins_env:
+                allowed_admins = {w.strip() for w in admins_env.split(',') if w.strip()}
+                if auth_wallet not in allowed_admins:
+                    return JSONResponse(
+                        status_code=403,
+                        content={"success": False, "error": "Forbidden"}
                     )
             
             # Получаем данные из тела запроса
@@ -2747,6 +2772,21 @@ def setup_api_routes(app):
                                 "user_id": user_id,
                                 "rewards": rewards_issued
                             })
+                            cursor.execute("""
+                                UPDATE public.user_bets
+                                SET reward_type = %s,
+                                    reward_data = %s
+                                WHERE id_prediction = %s
+                                AND id_user = %s
+                                AND chosen_outcome = %s
+                                AND status = 'pending'
+                            """, (
+                                reward_type,
+                                json.dumps(reward_data) if reward_data else None,
+                                prediction_id,
+                                user_id,
+                                winner_outcome
+                            ))
                     except Exception as e:
                         print(f"Error issuing reward to user {user_id}: {e}")
                         # Продолжаем обработку других пользователей

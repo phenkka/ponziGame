@@ -17,7 +17,7 @@ import base58
 
 class TestPredictionsRewardDistribution:
     @pytest.mark.asyncio
-    async def test_resolve_prediction_issues_rewards(self, clean_db, db_connection):
+    async def test_resolve_prediction_issues_rewards(self, clean_db, db_connection, monkeypatch):
         """Тест: при разрешении пари выигравшим пользователям выдаются награды"""
         if db_connection is None:
             pytest.skip("Database not available")
@@ -67,12 +67,14 @@ class TestPredictionsRewardDistribution:
         }
         
         async with AsyncClient(app=app, base_url="http://test") as client:
+            monkeypatch.delenv("PREDICTIONS_RESOLVE_ADMINS", raising=False)
             # Разрешаем пари с исходом A (пользователь выиграл)
-            response = await client.post(
-                f"/api/predictions/resolve/{prediction_id}",
-                headers=headers,
-                json={"winner_outcome": "A"}
-            )
+            with patch('core.utils.random.random', return_value=0.50):
+                response = await client.post(
+                    f"/api/predictions/resolve/{prediction_id}",
+                    headers=headers,
+                    json={"winner_outcome": "A"}
+                )
             
             assert response.status_code == 200
             data = response.json()
@@ -83,11 +85,13 @@ class TestPredictionsRewardDistribution:
             # Проверяем, что ставка помечена как выигрышная и награда выдана
             cursor = db_connection.cursor(cursor_factory=RealDictCursor)
             cursor.execute("""
-                SELECT status, reward_issued FROM public.user_bets WHERE id_bet = %s
+                SELECT status, reward_issued, reward_type, reward_data FROM public.user_bets WHERE id_bet = %s
             """, (bet['id_bet'],))
             updated_bet = cursor.fetchone()
             assert updated_bet['status'] == 'won'
             assert updated_bet['reward_issued'] is True
+            assert updated_bet['reward_type'] is not None
+            assert updated_bet['reward_data'] is not None
             
             # Проверяем, что награда действительно выдана (пак или карта)
             cursor.execute("""
@@ -113,6 +117,22 @@ class TestPredictionsRewardDistribution:
                 f"Reward not issued: chests={chest_count}, cards={card_count}, boosts={boost_count}"
             
             cursor.close()
+
+            # Проверяем, что эндпоинт пользователя возвращает reward_type/reward_data
+            response_bets = await client.get(
+                f"/api/predictions/user/{wallet}",
+                headers=headers
+            )
+            assert response_bets.status_code == 200
+            bets_data = response_bets.json()
+            assert bets_data["success"] is True
+            assert len(bets_data.get("bets", [])) > 0
+            returned_bet = next((b for b in bets_data["bets"] if b.get("prediction_id") == prediction_id), None)
+            assert returned_bet is not None
+            assert returned_bet.get("status") == "won"
+            assert returned_bet.get("reward_issued") is True
+            assert returned_bet.get("reward_type") is not None
+            assert returned_bet.get("reward_data") is not None
     
     @pytest.mark.asyncio
     async def test_reward_broken_packs(self, clean_db, db_connection):
@@ -273,7 +293,7 @@ class TestPredictionsRewardDistribution:
             cursor.close()
     
     @pytest.mark.asyncio
-    async def test_no_reward_for_losers(self, clean_db, db_connection):
+    async def test_no_reward_for_losers(self, clean_db, db_connection, monkeypatch):
         """Тест: проигравшие пользователи не получают награды"""
         if db_connection is None:
             pytest.skip("Database not available")
@@ -318,6 +338,7 @@ class TestPredictionsRewardDistribution:
         }
         
         async with AsyncClient(app=app, base_url="http://test") as client:
+            monkeypatch.delenv("PREDICTIONS_RESOLVE_ADMINS", raising=False)
             # Разрешаем пари с исходом A (пользователь проиграл, выбрал B)
             response = await client.post(
                 f"/api/predictions/resolve/{prediction_id}",
@@ -350,7 +371,7 @@ class TestPredictionsRewardDistribution:
             cursor.close()
     
     @pytest.mark.asyncio
-    async def test_resolve_prediction_cancelled(self, clean_db, db_connection):
+    async def test_resolve_prediction_cancelled(self, clean_db, db_connection, monkeypatch):
         """Тест: при отмене пари все ставки помечаются как cancelled и награды не выдаются"""
         if db_connection is None:
             pytest.skip("Database not available")
@@ -397,6 +418,7 @@ class TestPredictionsRewardDistribution:
         }
         
         async with AsyncClient(app=app, base_url="http://test") as client:
+            monkeypatch.delenv("PREDICTIONS_RESOLVE_ADMINS", raising=False)
             response = await client.post(
                 f"/api/predictions/resolve/{prediction_id}",
                 headers=headers,

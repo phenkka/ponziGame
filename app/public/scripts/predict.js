@@ -3,6 +3,71 @@
 let selectedOutcome = null;
 let currentPredictionId = null;
 
+function normalizeRewardData(rewardData) {
+    if (!rewardData) return null;
+    if (typeof rewardData === 'string') {
+        try { return JSON.parse(rewardData); } catch { return null; }
+    }
+    return rewardData;
+}
+
+function showBetRewardModal(bet) {
+    try {
+        const { body } = modalElements();
+        if (!body) return;
+
+        const rewardType = bet.reward_type;
+        const rewardData = normalizeRewardData(bet.reward_data);
+
+        let contentHtml = '';
+        if (!rewardType || !rewardData) {
+            contentHtml = `<div style="font-family: 'Inter', sans-serif; font-size: 18px; opacity: .95;">Reward details are unavailable.</div>`;
+        } else if (rewardType === 'broken_packs' || rewardType === 'common_pack' || rewardType === 'legendary_pack') {
+            const idChest = Number(rewardData.id_chest);
+            const qty = Number(rewardData.quantity || 1);
+            contentHtml = `
+                <div style="display:flex; gap:14px; justify-content:center; flex-wrap:wrap; margin-top: 16px;">
+                    ${Array.from({ length: Math.min(qty, 6) }).map(() => `
+                        <div style="display:flex; flex-direction:column; align-items:center; gap:8px; padding:12px 14px; border-radius:12px; background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.08);">
+                            <img class="modal-image" style="width:120px; height:auto; margin:0;" src="img/${getPackImage(idChest)}" alt="pack">
+                            <div style="font-family:'Inter', sans-serif; font-size: 14px; opacity:.9;">${getPackLabel(idChest)}</div>
+                        </div>
+                    `).join('')}
+                </div>
+                ${qty > 6 ? `<div style="margin-top: 10px; opacity:.8; font-family:'Inter', sans-serif;">+${qty - 6} more</div>` : ''}
+            `;
+        } else if (rewardType === 'card') {
+            const rarity = String(rewardData.rarity || '').toUpperCase();
+            contentHtml = `
+                <div style="font-family: 'Inter', sans-serif; font-size: 18px; opacity: .95; margin-top: 10px;">You received a card</div>
+                <div style="font-family: 'Inter', sans-serif; font-size: 18px; font-weight: 700; margin-top: 6px;">${rarity || 'CARD'}</div>
+            `;
+        } else if (rewardType === 'boost') {
+            const boostValue = Number(rewardData.boost_value || 0);
+            contentHtml = `
+                <div style="font-family: 'Inter', sans-serif; font-size: 18px; opacity: .95; margin-top: 10px;">Boost activated</div>
+                <div style="font-family: 'Inter', sans-serif; font-size: 18px; font-weight: 700; margin-top: 6px;">+${boostValue}% to LEGENDARY drop chance (24h)</div>
+            `;
+        } else {
+            contentHtml = `<div style="font-family: 'Inter', sans-serif; font-size: 18px; opacity: .95;">Reward: ${escapeHtml(String(rewardType))}</div>`;
+        }
+
+        body.innerHTML = `
+            <div class="modal-title">Congratulations!</div>
+            <div style="font-family: 'Inter', sans-serif; font-size: 18px; opacity: .95;">You won this bet</div>
+            ${contentHtml}
+            <div class="modal-actions" style="margin-top: 18px;">
+                <button class="btn btn-primary" id="pm-ok">OK</button>
+            </div>
+        `;
+
+        openModal();
+        document.getElementById('pm-ok')?.addEventListener('click', closeModal, { once: true });
+    } catch (e) {
+        // If modal helpers are unavailable for any reason, silently ignore.
+    }
+}
+
 // Загрузка пари
 async function loadPredictions(forceRefresh = false) {
     console.log('=== loadPredictions() called ===', { forceRefresh });
@@ -287,6 +352,11 @@ async function loadUserBets() {
                     </div>
                 ` : ''}
             `;
+
+            if (bet.status === 'won' && bet.reward_issued) {
+                betCard.style.cursor = 'pointer';
+                betCard.addEventListener('click', () => showBetRewardModal(bet));
+            }
             
             container.appendChild(betCard);
         });

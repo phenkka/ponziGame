@@ -288,6 +288,47 @@ class TestPredictionsEdgeCases:
             data = response.json()
             assert data["success"] is True
             assert data["bets"] == []
+
+    @pytest.mark.asyncio
+    async def test_get_user_bets_access_denied_other_wallet(self, clean_db, db_connection):
+        """Тест: нельзя получить ставки другого пользователя"""
+        if db_connection is None:
+            pytest.skip("Database not available")
+
+        signing_key_1 = SigningKey.generate()
+        wallet_1 = base58.b58encode(signing_key_1.verify_key.encode()).decode('utf-8')
+
+        signing_key_2 = SigningKey.generate()
+        wallet_2 = base58.b58encode(signing_key_2.verify_key.encode()).decode('utf-8')
+
+        cursor = db_connection.cursor()
+        cursor.execute(
+            "INSERT INTO Users (wallet, ref_code) VALUES (%s, %s)",
+            (wallet_1, "CODE1")
+        )
+        cursor.execute(
+            "INSERT INTO Users (wallet, ref_code) VALUES (%s, %s)",
+            (wallet_2, "CODE2")
+        )
+        db_connection.commit()
+        cursor.close()
+
+        message = "Gamba Auth: 1234567890"
+        signed = signing_key_1.sign(message.encode('utf-8'))
+        signature_list = list(signed.signature)
+
+        headers = {
+            "X-Wallet": wallet_1,
+            "X-Signature": json.dumps(signature_list),
+            "X-Message": message
+        }
+
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            response = await client.get(
+                f"/api/predictions/user/{wallet_2}",
+                headers=headers
+            )
+            assert response.status_code == 403
     
     @pytest.mark.asyncio
     async def test_create_bet_missing_params(self, clean_db, db_connection, auth_headers):
@@ -360,6 +401,134 @@ class TestPredictionsEdgeCases:
             data = response.json()
             assert data["success"] is False
             assert "not found" in data["error"].lower()
+
+    @pytest.mark.asyncio
+    async def test_resolve_requires_admin_when_env_set(self, clean_db, db_connection, monkeypatch):
+        """Тест: resolve запрещен не-админам, если задан PREDICTIONS_RESOLVE_ADMINS"""
+        if db_connection is None:
+            pytest.skip("Database not available")
+
+        signing_key = SigningKey.generate()
+        wallet = base58.b58encode(signing_key.verify_key.encode()).decode('utf-8')
+
+        cursor = db_connection.cursor()
+        cursor.execute("INSERT INTO Users (wallet, ref_code) VALUES (%s, %s)", (wallet, "TESTCODE"))
+        cursor.execute(
+            """
+            INSERT INTO public.predictions (polymarket_id, title, outcome_a, outcome_b, status)
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING id_prediction
+            """,
+            ("test-admin-1", "Test", "Yes", "No", "active")
+        )
+        prediction_id = cursor.fetchone()[0]
+        db_connection.commit()
+        cursor.close()
+
+        # Разрешаем только другого админа
+        monkeypatch.setenv("PREDICTIONS_RESOLVE_ADMINS", "SomeOtherWallet")
+
+        signed = signing_key.sign(b"test message")
+        signature_list = list(signed.signature)
+        headers = {
+            "X-Wallet": wallet,
+            "X-Signature": json.dumps(signature_list),
+            "X-Message": "test message",
+            "Content-Type": "application/json"
+        }
+
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            response = await client.post(
+                f"/api/predictions/resolve/{prediction_id}",
+                headers=headers,
+                json={"winner_outcome": "A"}
+            )
+            assert response.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_resolve_idempotent_no_double_rewards(self, clean_db, db_connection, monkeypatch):
+        """Тест: повторный resolve не должен выдавать награду второй раз"""
+        if db_connection is None:
+            pytest.skip("Database not available")
+
+        monkeypatch.delenv("PREDICTIONS_RESOLVE_ADMINS", raising=False)
+
+        cursor = db_connection.cursor(cursor_factory=RealDictCursor)
+
+        signing_key = SigningKey.generate()
+        wallet = base58.b58encode(signing_key.verify_key.encode()).decode('utf-8')
+
+        cursor.execute(
+            "INSERT INTO Users (wallet, ref_code) VALUES (%s, %s) RETURNING id_user",
+            (wallet, "TESTCODE")
+        )
+        user_id = cursor.fetchone()["id_user"]
+
+        cursor.execute(
+            """
+            INSERT INTO public.predictions (polymarket_id, title, outcome_a, outcome_b, status)
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING id_prediction
+            """,
+            ("test-idem-1", "Test", "Yes", "No", "active")
+        )
+        prediction_id = cursor.fetchone()["id_prediction"]
+
+        cursor.execute(
+            """
+            INSERT INTO public.user_bets (id_user, id_prediction, chosen_outcome, status)
+            VALUES (%s, %s, %s, %s)
+            """,
+            (user_id, prediction_id, "A", "pending")
+        )
+        db_connection.commit()
+        cursor.close()
+
+        signed = signing_key.sign(b"test message")
+        signature_list = list(signed.signature)
+        headers = {
+            "X-Wallet": wallet,
+            "X-Signature": json.dumps(signature_list),
+            "X-Message": "test message",
+            "Content-Type": "application/json"
+        }
+
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            # Делаем награду детерминированной (common_pack)
+            with patch('core.utils.random.random', return_value=0.50):
+                r1 = await client.post(
+                    f"/api/predictions/resolve/{prediction_id}",
+                    headers=headers,
+                    json={"winner_outcome": "A"}
+                )
+            assert r1.status_code == 200
+            d1 = r1.json()
+            assert d1["success"] is True
+            assert d1["rewards_count"] == 1
+
+            # Считаем выданные паки
+            cur = db_connection.cursor(cursor_factory=RealDictCursor)
+            cur.execute("SELECT COUNT(*) as cnt FROM Chest_purchases WHERE id_user = %s", (user_id,))
+            before = cur.fetchone()["cnt"]
+            cur.close()
+
+            # Повторный resolve не должен создать новые награды
+            with patch('core.utils.random.random', return_value=0.50):
+                r2 = await client.post(
+                    f"/api/predictions/resolve/{prediction_id}",
+                    headers=headers,
+                    json={"winner_outcome": "A"}
+                )
+            assert r2.status_code == 200
+            d2 = r2.json()
+            assert d2["success"] is True
+
+            cur = db_connection.cursor(cursor_factory=RealDictCursor)
+            cur.execute("SELECT COUNT(*) as cnt FROM Chest_purchases WHERE id_user = %s", (user_id,))
+            after = cur.fetchone()["cnt"]
+            cur.close()
+
+            assert after == before
     
     @pytest.mark.asyncio
     async def test_resolve_invalid_winner(self, clean_db, db_connection):

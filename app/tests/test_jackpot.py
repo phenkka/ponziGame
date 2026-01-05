@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from httpx import AsyncClient
 from main import app
 from psycopg2.extras import RealDictCursor
-from core.utils import get_user_tickets, get_or_create_active_round, add_to_jackpot, draw_jackpot
+from core.utils import get_user_tickets, get_or_create_active_round, add_to_jackpot, draw_jackpot, save_tickets_snapshot
 
 
 class TestJackpotBasic:
@@ -402,6 +402,146 @@ class TestJackpotTickets:
         cursor = db_connection.cursor(cursor_factory=RealDictCursor)
         tickets = get_user_tickets(cursor, user_id)
         assert tickets == 130  # 20 + 20 + 90
+        cursor.close()
+
+    @pytest.mark.asyncio
+    async def test_bonus_pack_prediction_reward_excluded_from_tickets(self, clean_db, db_connection, auth_headers):
+        if db_connection is None:
+            pytest.skip("Database not available")
+
+        wallet = auth_headers["X-Wallet"]
+
+        cursor = db_connection.cursor(cursor_factory=RealDictCursor)
+        cursor.execute(
+            "INSERT INTO Users (wallet, ref_code) VALUES (%s, %s) RETURNING id_user",
+            (wallet, f"TESTCODE_BONUS_PRED_{wallet[:8]}")
+        )
+        user_id = cursor.fetchone()["id_user"]
+
+        cursor.execute("""
+            INSERT INTO Chests (prob_common, prob_rare, prob_epic, prob_legendary, chance_loss, price)
+            VALUES (80, 12, 7, 1, 0, 100)
+            RETURNING id_chest
+        """)
+        chest_id = cursor.fetchone()["id_chest"]
+
+        cursor.execute("""
+            INSERT INTO Cards (rarity, start_bounty, name, image_url, image_key)
+            VALUES ('basic', 50, 'Bonus Card', 'bonus.png', 'TEST_BONUS_PRED_CARD')
+            ON CONFLICT (image_key) DO NOTHING
+            RETURNING id_card
+        """)
+        card = cursor.fetchone()
+        if not card:
+            cursor.execute("SELECT id_card FROM Cards WHERE image_key = 'TEST_BONUS_PRED_CARD'")
+            card = cursor.fetchone()
+        card_id = card["id_card"]
+
+        cursor.execute("""
+            INSERT INTO Chest_purchases (id_user, id_chest, tx_signature)
+            VALUES (%s, %s, %s)
+            RETURNING id_purchase
+        """, (user_id, chest_id, f"prediction_reward_{user_id}_123"))
+        purchase_id = cursor.fetchone()["id_purchase"]
+
+        cursor.execute("""
+            INSERT INTO Chest_openings (id_purchase, id_user, id_chest)
+            VALUES (%s, %s, %s)
+            RETURNING id_opening
+        """, (purchase_id, user_id, chest_id))
+        opening_id = cursor.fetchone()["id_opening"]
+
+        cursor.execute("""
+            INSERT INTO Card_User (id_user, id_card, quantity, id_opening)
+            VALUES (%s, %s, 1, %s)
+            ON CONFLICT (id_user, id_card) DO UPDATE SET quantity = EXCLUDED.quantity
+        """, (user_id, card_id, opening_id))
+
+        db_connection.commit()
+
+        tickets = get_user_tickets(cursor, user_id)
+        assert tickets == 0
+
+        cursor.close()
+
+    @pytest.mark.asyncio
+    async def test_bonus_pack_daily_checkin_excluded_from_tickets_and_snapshot(self, clean_db, db_connection, auth_headers):
+        if db_connection is None:
+            pytest.skip("Database not available")
+
+        wallet = auth_headers["X-Wallet"]
+
+        cursor = db_connection.cursor(cursor_factory=RealDictCursor)
+        cursor.execute(
+            "INSERT INTO Users (wallet, ref_code) VALUES (%s, %s) RETURNING id_user",
+            (wallet, f"TESTCODE_BONUS_CHECKIN_{wallet[:8]}")
+        )
+        user_id = cursor.fetchone()["id_user"]
+
+        cursor.execute("""
+            INSERT INTO Chests (prob_common, prob_rare, prob_epic, prob_legendary, chance_loss, price)
+            VALUES (80, 12, 7, 1, 0, 100)
+            RETURNING id_chest
+        """)
+        chest_id = cursor.fetchone()["id_chest"]
+
+        cursor.execute("""
+            INSERT INTO Cards (rarity, start_bounty, name, image_url, image_key)
+            VALUES ('basic', 60, 'Checkin Card', 'checkin.png', 'TEST_BONUS_CHECKIN_CARD')
+            ON CONFLICT (image_key) DO NOTHING
+            RETURNING id_card
+        """)
+        card = cursor.fetchone()
+        if not card:
+            cursor.execute("SELECT id_card FROM Cards WHERE image_key = 'TEST_BONUS_CHECKIN_CARD'")
+            card = cursor.fetchone()
+        card_id = card["id_card"]
+
+        cursor.execute("""
+            INSERT INTO Chest_purchases (id_user, id_chest, tx_signature)
+            VALUES (%s, %s, %s)
+            RETURNING id_purchase
+        """, (user_id, chest_id, f"daily_checkin_{user_id}_2026-01-05_123"))
+        purchase_id = cursor.fetchone()["id_purchase"]
+
+        cursor.execute("""
+            INSERT INTO Chest_openings (id_purchase, id_user, id_chest)
+            VALUES (%s, %s, %s)
+            RETURNING id_opening
+        """, (purchase_id, user_id, chest_id))
+        opening_id = cursor.fetchone()["id_opening"]
+
+        cursor.execute("""
+            INSERT INTO Card_User (id_user, id_card, quantity, id_opening)
+            VALUES (%s, %s, 1, %s)
+            ON CONFLICT (id_user, id_card) DO UPDATE SET quantity = EXCLUDED.quantity
+        """, (user_id, card_id, opening_id))
+
+        db_connection.commit()
+
+        tickets = get_user_tickets(cursor, user_id)
+        assert tickets == 0
+
+        from datetime import datetime, timedelta
+        started_at = datetime.now() - timedelta(hours=1)
+        ends_at = datetime.now() + timedelta(hours=1)
+        cursor.execute("""
+            INSERT INTO Jackpot_rounds (started_at, ends_at, status, total_amount)
+            VALUES (%s, %s, 'active', 0)
+            RETURNING id_round
+        """, (started_at, ends_at))
+        round_id = cursor.fetchone()["id_round"]
+        db_connection.commit()
+
+        save_tickets_snapshot(cursor, db_connection, round_id, datetime.now())
+
+        cursor.execute(
+            "SELECT COUNT(*) as cnt FROM Jackpot_tickets_snapshot WHERE id_round = %s",
+            (round_id,)
+        )
+        cnt = cursor.fetchone()["cnt"]
+        assert int(cnt) == 0
+
         cursor.close()
 
 

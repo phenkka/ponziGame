@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from pathlib import Path
 
 from core.auth import auth_middleware
 from routes.pages import setup_page_routes
@@ -22,9 +23,11 @@ def create_app() -> FastAPI:
     # Middleware для проверки авторизации
     app.middleware("http")(auth_middleware)
 
-    app.mount("/css", StaticFiles(directory="public/css"), name="css")
-    app.mount("/img", StaticFiles(directory="public/img"), name="img")
-    app.mount("/scripts", StaticFiles(directory="public/scripts"), name="scripts")
+    base_dir = Path(__file__).resolve().parent
+    public_dir = base_dir / "public"
+    app.mount("/css", StaticFiles(directory=str(public_dir / "css")), name="css")
+    app.mount("/img", StaticFiles(directory=str(public_dir / "img")), name="img")
+    app.mount("/scripts", StaticFiles(directory=str(public_dir / "scripts")), name="scripts")
     
     # Настраиваем роуты
     setup_page_routes(app)
