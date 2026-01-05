@@ -148,12 +148,12 @@ class TestJackpotAmountUpdates:
                 data = response.json()
                 assert data["success"] is True
         
-        # Проверяем, что 10% (10) добавлено в джекпот
+        # Проверяем, что 40% (40) добавлено в джекпот
         cursor = db_connection.cursor(cursor_factory=RealDictCursor)
         cursor.execute("SELECT total_amount FROM Jackpot_rounds WHERE status = 'active'")
         round_data = cursor.fetchone()
         assert round_data is not None
-        assert float(round_data["total_amount"]) == 10.0  # 10% от 100
+        assert float(round_data["total_amount"]) == 40.0  # 40% от 100
         cursor.close()
     
     @pytest.mark.asyncio
@@ -200,12 +200,12 @@ class TestJackpotAmountUpdates:
                     )
                     assert response.status_code == 200
         
-        # Проверяем, что в джекпот добавлено 3 * 20 = 60 (10% от 200 * 3)
+        # Проверяем, что в джекпот добавлено 3 * 80 = 240 (40% от 200 * 3)
         cursor = db_connection.cursor(cursor_factory=RealDictCursor)
         cursor.execute("SELECT total_amount FROM Jackpot_rounds WHERE status = 'active'")
         round_data = cursor.fetchone()
         assert round_data is not None
-        assert float(round_data["total_amount"]) == 60.0  # 10% от 200 * 3
+        assert float(round_data["total_amount"]) == 240.0  # 40% от 200 * 3
         cursor.close()
     
     @pytest.mark.asyncio
@@ -250,7 +250,7 @@ class TestJackpotAmountUpdates:
             mock_verify.return_value = {"valid": True}
             
             async with AsyncClient(app=app, base_url="http://test") as client:
-                # Покупаем пак - должно добавить 10% (50) в джекпот
+                # Покупаем пак - должно добавить 40% (200) в джекпот
                 response = await client.post(
                     "/api/chests/buy",
                     json={
@@ -262,11 +262,11 @@ class TestJackpotAmountUpdates:
                 )
                 assert response.status_code == 200
         
-        # Проверяем, что сумма в джекпоте увеличилась (100 + 50 = 150)
+        # Проверяем, что сумма в джекпоте увеличилась (100 + 200 = 300)
         cursor = db_connection.cursor(cursor_factory=RealDictCursor)
         cursor.execute("SELECT total_amount FROM Jackpot_rounds WHERE id_round = %s", (round_id,))
         round_data = cursor.fetchone()
-        assert float(round_data["total_amount"]) == 150.0
+        assert float(round_data["total_amount"]) == 300.0
         
         # Проверяем, что раунд все еще активен
         cursor.execute("SELECT status FROM Jackpot_rounds WHERE id_round = %s", (round_id,))
@@ -1085,7 +1085,7 @@ class TestJackpotRoundTransitions:
             mock_verify.return_value = {"valid": True}
             
             async with AsyncClient(app=app, base_url="http://test") as client:
-                # Покупаем пак - должен автоматически завершить старый раунд, создать новый и добавить 10% в новый
+                # Покупаем пак - должен автоматически завершить старый раунд, создать новый и добавить 40% в новый
                 response = await client.post(
                     "/api/chests/buy",
                     json={
@@ -1103,12 +1103,12 @@ class TestJackpotRoundTransitions:
         old_round_status = cursor.fetchone()
         assert old_round_status["status"] == "completed"
         
-        # Проверяем, что создан новый активный раунд с добавленной суммой (10% от 100 = 10)
+        # Проверяем, что создан новый активный раунд с добавленной суммой (40% от 100 = 40)
         cursor.execute("SELECT * FROM Jackpot_rounds WHERE status = 'active'")
         new_rounds = cursor.fetchall()
         assert len(new_rounds) == 1
         assert new_rounds[0]["id_round"] != old_round_id
-        assert float(new_rounds[0]["total_amount"]) == 10.0
+        assert float(new_rounds[0]["total_amount"]) == 40.0
         cursor.close()
     
     @pytest.mark.asyncio

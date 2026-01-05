@@ -68,8 +68,8 @@ class TestSuperJackpotBasic:
 
 class TestSuperJackpotAmountUpdates:
     @pytest.mark.asyncio
-    async def test_buy_chest_adds_5_percent_to_super_jackpot(self, clean_db, db_connection, auth_headers):
-        """Тест: покупка пака добавляет 5% от стоимости в супер джекпот"""
+    async def test_buy_chest_adds_10_percent_to_super_jackpot(self, clean_db, db_connection, auth_headers):
+        """Тест: покупка пака добавляет 10% от стоимости в супер джекпот"""
         if db_connection is None:
             pytest.skip("Database not available")
         
@@ -112,12 +112,12 @@ class TestSuperJackpotAmountUpdates:
                 data = response.json()
                 assert data["success"] is True
         
-        # Проверяем, что 5% (5) добавлено в супер джекпот
+        # Проверяем, что 10% (10) добавлено в супер джекпот
         cursor = db_connection.cursor(cursor_factory=RealDictCursor)
         cursor.execute("SELECT total_amount FROM Super_jackpot_rounds WHERE winner_user_id IS NULL ORDER BY id_round DESC LIMIT 1")
         round_data = cursor.fetchone()
         assert round_data is not None
-        assert float(round_data["total_amount"]) == 5.0  # 5% от 100
+        assert float(round_data["total_amount"]) == 10.0  # 10% от 100
         cursor.close()
     
     @pytest.mark.asyncio
@@ -165,12 +165,12 @@ class TestSuperJackpotAmountUpdates:
                     )
                     assert response.status_code == 200
         
-        # Проверяем, что в супер джекпот добавлено 3 * 10 = 30 (5% от 200 * 3)
+        # Проверяем, что в супер джекпот добавлено 3 * 20 = 60 (10% от 200 * 3)
         cursor = db_connection.cursor(cursor_factory=RealDictCursor)
         cursor.execute("SELECT total_amount FROM Super_jackpot_rounds WHERE winner_user_id IS NULL ORDER BY id_round DESC LIMIT 1")
         round_data = cursor.fetchone()
         assert round_data is not None
-        assert float(round_data["total_amount"]) == 30.0  # 5% от 200 * 3
+        assert float(round_data["total_amount"]) == 60.0  # 10% от 200 * 3
         cursor.close()
 
 

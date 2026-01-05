@@ -44,7 +44,7 @@ class TestPolymarketSyncAPI:
                     {"title": "No", "price": 0.52}
                 ],
                 "outcomePrices": [0.48, 0.52],
-                "endDate": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
+                "endDate": (datetime.now(timezone.utc) + timedelta(days=15)).isoformat(),
                 "category": "crypto"
             },
             {
@@ -58,7 +58,7 @@ class TestPolymarketSyncAPI:
                     {"title": "No", "price": 0.50}
                 ],
                 "outcomePrices": [0.50, 0.50],
-                "endDate": (datetime.now(timezone.utc) + timedelta(days=5)).isoformat(),
+                "endDate": (datetime.now(timezone.utc) + timedelta(days=16)).isoformat(),
                 "category": "crypto"
             }
         ]

@@ -908,14 +908,14 @@ class TestChestPurchaseQuantity:
             count = cursor.fetchone()[0]
             assert count == quantity
             
-            # Проверяем, что джекпот получил правильную сумму (10% от общей)
+            # Проверяем, что джекпот получил правильную сумму (40% от общей)
             cursor.execute("""
                 SELECT total_amount FROM Jackpot_rounds WHERE status = 'active'
                 ORDER BY id_round DESC LIMIT 1
             """)
             jackpot = cursor.fetchone()
             if jackpot:
-                expected_jackpot = total_price * 0.1
+                expected_jackpot = total_price * 0.4
                 assert float(jackpot[0]) == expected_jackpot, \
                     f"Expected jackpot contribution {expected_jackpot}, got {jackpot[0]}"
             
@@ -1257,7 +1257,7 @@ class TestChestPurchaseQuantity:
         quantity = 4
         price_per_pack = 250.0
         total_price = price_per_pack * quantity  # 1000
-        expected_jackpot_contribution = total_price * 0.1  # 100
+        expected_jackpot_contribution = total_price * 0.4  # 400
         
         # Мокируем успешную верификацию транзакции
         mock_verify_tx.return_value = {
