@@ -2,6 +2,7 @@ import pytest
 import psycopg2
 from psycopg2.extras import RealDictCursor
 import os
+import time
 from dotenv import load_dotenv
 import base58
 from nacl.signing import SigningKey
@@ -14,10 +15,16 @@ load_dotenv()
 # вместо основной БД lab. ОСНОВНАЯ БД lab НЕ БУДЕТ ЗАТРОНУТА ТЕСТАМИ!
 os.environ["POSTGRES_DB"] = "lab_test"
 
+# Для тестов по умолчанию выключаем строгие прод-флаги.
+# Отдельные тесты могут включать их через monkeypatch.setenv.
+os.environ["AUTH_CHALLENGE_REQUIRED"] = "0"
+os.environ["TX_REQUIRE_CONFIRMATION_STATUS"] = "0"
+
 # Тестовые данные
 TEST_WALLET = "TestWallet1234567890123456789012345678901234567890"
 TEST_WALLET_2 = "TestWallet9876543210987654321098765432109876543210"
-TEST_MESSAGE = "Gamba Auth: 1234567890"
+os.environ["AUTH_MESSAGE_MAX_AGE_SECONDS"] = "9999999999"
+TEST_MESSAGE = f"Gamba Auth: {int(time.time() * 1000)}"
 
 @pytest.fixture(scope="session")
 def db_connection():

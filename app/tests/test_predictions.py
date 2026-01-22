@@ -13,6 +13,7 @@ from main import app
 import json
 from nacl.signing import SigningKey
 import base58
+import time
 
 
 def get_utc_date():
@@ -485,13 +486,13 @@ class TestPredictionsEdgeCases:
         cursor.close()
         
         # Создаем заголовки авторизации
-        signed = signing_key.sign(b"test message")
-        signature_list = list(signed.signature)
+        message = f"Gamba Auth: {int(time.time() * 1000)}"
+        signature_list = list(signing_key.sign(message.encode('utf-8')).signature)
         
         headers = {
             "X-Wallet": test_wallet,
             "X-Signature": json.dumps(signature_list),
-            "X-Message": "test message",
+            "X-Message": message,
             "Content-Type": "application/json"
         }
         
@@ -535,12 +536,12 @@ class TestPredictionsEdgeCases:
         # Разрешаем только другого админа
         monkeypatch.setenv("PREDICTIONS_RESOLVE_ADMINS", "SomeOtherWallet")
 
-        signed = signing_key.sign(b"test message")
-        signature_list = list(signed.signature)
+        message = f"Gamba Auth: {int(time.time() * 1000)}"
+        signature_list = list(signing_key.sign(message.encode('utf-8')).signature)
         headers = {
             "X-Wallet": wallet,
             "X-Signature": json.dumps(signature_list),
-            "X-Message": "test message",
+            "X-Message": message,
             "Content-Type": "application/json"
         }
 
@@ -594,12 +595,12 @@ class TestPredictionsEdgeCases:
         db_connection.commit()
         cursor.close()
 
-        signed = signing_key.sign(b"test message")
-        signature_list = list(signed.signature)
+        message = f"Gamba Auth: {int(time.time() * 1000)}"
+        signature_list = list(signing_key.sign(message.encode('utf-8')).signature)
         headers = {
             "X-Wallet": wallet,
             "X-Signature": json.dumps(signature_list),
-            "X-Message": "test message",
+            "X-Message": message,
             "Content-Type": "application/json"
         }
 
@@ -668,13 +669,13 @@ class TestPredictionsEdgeCases:
         cursor.close()
         
         # Создаем заголовки авторизации
-        signed = signing_key.sign(b"test message")
-        signature_list = list(signed.signature)
+        message = f"Gamba Auth: {int(time.time() * 1000)}"
+        signature_list = list(signing_key.sign(message.encode('utf-8')).signature)
         
         headers = {
             "X-Wallet": test_wallet,
             "X-Signature": json.dumps(signature_list),
-            "X-Message": "test message",
+            "X-Message": message,
             "Content-Type": "application/json"
         }
         
@@ -729,13 +730,13 @@ class TestPredictionsEdgeCases:
         cursor.close()
         
         # Создаем заголовки авторизации, используем тот же wallet
-        signed = signing_key.sign(b"test message")
-        signature_list = list(signed.signature)
+        message = f"Gamba Auth: {int(time.time() * 1000)}"
+        signature_list = list(signing_key.sign(message.encode('utf-8')).signature)
         
         headers = {
             "X-Wallet": wallet,
             "X-Signature": json.dumps(signature_list),
-            "X-Message": "test message",
+            "X-Message": message,
             "Content-Type": "application/json"
         }
         

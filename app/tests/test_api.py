@@ -1613,7 +1613,8 @@ class TestChestPurchaseQuantity:
                     "id_chest": chest_id,
                     "txSignature": tx_signature
                 },
-                cookies=cookies
+                cookies=cookies,
+                headers={"Origin": "http://test"}
             )
             # Если вернулся 500, выводим ошибку для отладки
             if response.status_code == 500:

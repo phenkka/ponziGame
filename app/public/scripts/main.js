@@ -84,6 +84,30 @@ function buildAuthPayload(wallet, signature, message) {
   return payload;
 }
 
+async function requestAuthChallenge(wallet) {
+  const res = await fetch('/api/auth/challenge', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ wallet })
+  });
+  const data = await res.json();
+  if (!data || !data.success || !data.message) {
+    throw new Error((data && data.error) ? data.error : 'Failed to get auth challenge');
+  }
+  return data.message;
+}
+
+async function performAuth(publicKey) {
+  const message = await requestAuthChallenge(publicKey);
+  const signature = await signMessage(message, publicKey);
+  const response = await fetch('/api/auth', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(buildAuthPayload(publicKey, signature.signature, message))
+  });
+  return await response.json();
+}
+
 async function dynamicImport(urls) {
   for (const u of urls) {
     try { return await import(u); } catch (e) { /* try next */ }
@@ -386,14 +410,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (wlData.success) {
           if (wlData.hasAccess) {
             // User already has access, proceed with normal auth
-            const message = `Gamba Auth: ${Date.now()}`;
-            const signature = await signMessage(message, publicKey);
-            const response = await fetch('/api/auth', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(buildAuthPayload(publicKey, signature.signature, message))
-            });
-            const data = await response.json();
+            const data = await performAuth(publicKey);
             if (data.success) {
               clearPendingReferralCode();
               showUserInfo(publicKey, data.refCode, { redirect: true });
@@ -431,14 +448,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (wlData.success) {
           if (wlData.hasAccess) {
             // User already has access, proceed with normal auth
-            const message = `Gamba Auth: ${Date.now()}`;
-            const signature = await signMessage(message, publicKey);
-            const response = await fetch('/api/auth', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(buildAuthPayload(publicKey, signature.signature, message))
-            });
-            const data = await response.json();
+            const data = await performAuth(publicKey);
             if (data.success) {
               clearPendingReferralCode();
               showUserInfo(publicKey, data.refCode, { redirect: true });
@@ -476,14 +486,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (wlData.success) {
           if (wlData.hasAccess) {
             // User already has access, proceed with normal auth
-            const message = `Gamba Auth: ${Date.now()}`;
-            const signature = await signMessage(message, publicKey);
-            const response = await fetch('/api/auth', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(buildAuthPayload(publicKey, signature.signature, message))
-            });
-            const data = await response.json();
+            const data = await performAuth(publicKey);
             if (data.success) {
               clearPendingReferralCode();
               showUserInfo(publicKey, data.refCode, { redirect: true });
@@ -521,14 +524,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (wlData.success) {
           if (wlData.hasAccess) {
             // User already has access, proceed with normal auth
-            const message = `Gamba Auth: ${Date.now()}`;
-            const signature = await signMessage(message, publicKey);
-            const response = await fetch('/api/auth', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(buildAuthPayload(publicKey, signature.signature, message))
-            });
-            const data = await response.json();
+            const data = await performAuth(publicKey);
             if (data.success) {
               clearPendingReferralCode();
               showUserInfo(publicKey, data.refCode, { redirect: true });
@@ -1546,14 +1542,7 @@ async function connectWallet() {
   try {
     hideMessage();
     const publicKey = await connectPhantom();
-    const message = `Gamba Auth: ${Date.now()}`;
-    const signature = await signMessage(message, publicKey);
-    const response = await fetch('/api/auth', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(buildAuthPayload(publicKey, signature.signature, message))
-    });
-    const data = await response.json();
+    const data = await performAuth(publicKey);
     if (data.success) {
       clearPendingReferralCode();
       showUserInfo(publicKey, data.refCode, { redirect: true });

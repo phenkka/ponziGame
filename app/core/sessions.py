@@ -3,6 +3,7 @@ from psycopg2.extras import RealDictCursor
 import hashlib
 import json
 
+from core.auth import _validate_auth_message, _csrf_check_cookie_auth
 from core.utils import get_db_connection, verify_solana_signature
 
 
@@ -16,6 +17,8 @@ async def verify_session_cookie(request: Request) -> dict:
         try:
             # Парсим signature из строки (формат: "[1,2,3,...]")
             signature_list = json.loads(x_signature) if isinstance(x_signature, str) else x_signature
+
+            _validate_auth_message(x_message)
             
             # Верифицируем подпись
             if not verify_solana_signature(x_wallet, x_message, signature_list):
@@ -66,6 +69,7 @@ async def verify_session_cookie(request: Request) -> dict:
     # Проверяем токен в БД (упрощенная версия - проверяем по wallet)
     # В будущем можно создать таблицу Sessions для хранения токенов
     try:
+        _csrf_check_cookie_auth(request)
         conn = get_db_connection()
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         

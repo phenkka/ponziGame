@@ -1,10 +1,14 @@
 from fastapi import HTTPException, Depends, Request
 from fastapi.responses import JSONResponse
 from psycopg2.extras import RealDictCursor
+import psycopg2
 import hashlib
 import json
 import os
 import requests
+import secrets
+import re
+from datetime import datetime, timedelta
 
 from core.models import AuthRequest
 from core.utils import get_db_connection, generate_ref_code, verify_solana_signature, verify_solana_transaction, HELIUS_RPC_URL, determine_card_rarity, get_random_card_by_rarity, get_or_create_active_round, add_to_jackpot, draw_jackpot, add_to_super_jackpot, claim_super_jackpot, get_or_create_active_super_jackpot_round, get_today_daily_code, get_user_checkin_status, process_daily_checkin, get_user_active_boost, issue_prediction_reward
@@ -80,6 +84,20 @@ def setup_api_routes(app):
         try:
             # Логируем запрос для отладки
             print(f"Auth request: wallet={request.wallet[:10]}..., message={request.message}, signature_length={len(request.signature)}")
+
+            require_challenge = os.getenv("AUTH_CHALLENGE_REQUIRED", "0").lower() in ("1", "true", "yes")
+            challenge_re = re.compile(
+                r"^Gamba Auth\s*\nWallet:\s*(\S+)\s*\nNonce:\s*([A-Za-z0-9_\-]+)\s*\nIssuedAt:\s*(\d{10,})\s*$"
+            )
+            m = challenge_re.match((request.message or "").strip())
+            if require_challenge and not m:
+                return JSONResponse(
+                    status_code=200,
+                    content={"success": False, "error": "Challenge required"}
+                )
+
+            from core.auth import _validate_auth_message
+            _validate_auth_message(request.message)
             
             # Верифицируем подпись перед созданием/получением пользователя
             signature_valid = verify_solana_signature(request.wallet, request.message, request.signature)
@@ -98,6 +116,27 @@ def setup_api_routes(app):
             
             conn = get_db_connection()
             cursor = conn.cursor(cursor_factory=RealDictCursor)
+
+            if m:
+                msg_wallet = m.group(1)
+                nonce = m.group(2)
+                if msg_wallet != request.wallet:
+                    cursor.close()
+                    conn.close()
+                    return JSONResponse(status_code=200, content={"success": False, "error": "Invalid challenge"})
+
+                cursor.execute("DELETE FROM Auth_challenges WHERE expires_at < now()")
+                cursor.execute(
+                    "DELETE FROM Auth_challenges WHERE nonce = %s AND wallet = %s AND message = %s AND expires_at > now() RETURNING nonce",
+                    (nonce, request.wallet, request.message.strip())
+                )
+                consumed = cursor.fetchone()
+                if not consumed:
+                    conn.rollback()
+                    cursor.close()
+                    conn.close()
+                    return JSONResponse(status_code=200, content={"success": False, "error": "Challenge expired or already used"})
+                conn.commit()
             
             # Проверяем, существует ли пользователь
             cursor.execute("SELECT * FROM Users WHERE wallet = %s", (request.wallet,))
@@ -174,11 +213,17 @@ def setup_api_routes(app):
                 value=token_hash,
                 max_age=86400 * 7,  # 7 дней
                 httponly=True,
-                samesite="lax"
+                samesite=os.getenv("AUTH_COOKIE_SAMESITE", "lax"),
+                secure=os.getenv("AUTH_COOKIE_SECURE", "0").lower() in ("1", "true", "yes")
             )
             
             print(f"Cookie set: auth_token={token_hash[:20]}...")
             return response
+        except HTTPException as e:
+            return JSONResponse(
+                status_code=200,
+                content={"success": False, "error": str(getattr(e, 'detail', 'Authentication failed'))}
+            )
         except Exception as e:
             print(f"Auth error: {e}")
             import traceback
@@ -189,6 +234,40 @@ def setup_api_routes(app):
             }
             print(f"Returning error response: {error_response}")
             return JSONResponse(status_code=200, content=error_response)
+
+    class AuthChallengeRequest(BaseModel):
+        wallet: str
+
+    @app.post("/api/auth/challenge")
+    async def auth_challenge(payload: AuthChallengeRequest):
+        try:
+            wallet = payload.wallet
+            if not wallet:
+                return JSONResponse(status_code=400, content={"success": False, "error": "Missing wallet"})
+
+            ttl = int(os.getenv("AUTH_CHALLENGE_TTL_SECONDS", "120"))
+            issued_at_ms = int(datetime.utcnow().timestamp() * 1000)
+            nonce = secrets.token_urlsafe(16)
+            message = f"Gamba Auth\nWallet: {wallet}\nNonce: {nonce}\nIssuedAt: {issued_at_ms}"
+            expires_at = datetime.utcnow() + timedelta(seconds=ttl)
+
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute("DELETE FROM Auth_challenges WHERE expires_at < now()")
+            cursor.execute(
+                "INSERT INTO Auth_challenges (nonce, wallet, message, expires_at) VALUES (%s, %s, %s, %s)",
+                (nonce, wallet, message, expires_at)
+            )
+            conn.commit()
+            cursor.close()
+            conn.close()
+
+            return {"success": True, "nonce": nonce, "message": message, "expiresAt": int(expires_at.timestamp() * 1000)}
+        except Exception as e:
+            print(f"Auth challenge error: {e}")
+            import traceback
+            traceback.print_exc()
+            return JSONResponse(status_code=500, content={"success": False, "error": "Failed to issue challenge"})
     
     @app.get("/api/user/{wallet}")
     async def get_user(wallet: str, request: Request):
@@ -1195,13 +1274,22 @@ def setup_api_routes(app):
                 # Для нескольких паков используем уникальный tx_signature с индексом
                 # Это позволяет отслеживать каждую покупку отдельно
                 unique_tx_sig = f"{tx_signature}_{i}" if quantity > 1 else tx_signature
-                
-                cursor.execute("""
-                    INSERT INTO Chest_purchases (id_user, id_chest, tx_signature)
-                    VALUES (%s, %s, %s)
-                    RETURNING id_purchase
-                """, (user['id_user'], id_chest, unique_tx_sig))
-                
+
+                try:
+                    cursor.execute("""
+                        INSERT INTO Chest_purchases (id_user, id_chest, tx_signature)
+                        VALUES (%s, %s, %s)
+                        RETURNING id_purchase
+                    """, (user['id_user'], id_chest, unique_tx_sig))
+                except psycopg2.errors.UniqueViolation:
+                    conn.rollback()
+                    cursor.close()
+                    conn.close()
+                    return JSONResponse(
+                        status_code=400,
+                        content={"success": False, "error": "Transaction already used"}
+                    )
+
                 purchase = cursor.fetchone()
                 if purchase:
                     purchase_ids.append(purchase['id_purchase'])

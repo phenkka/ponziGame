@@ -105,14 +105,28 @@ def verify_solana_transaction(tx_signature: str, expected_sender: str, expected_
             status_response = requests.post(rpc_url, json=status_payload, timeout=30)
             if status_response.status_code == 200:
                 status_data = status_response.json()
-                if "result" in status_data and status_data["result"]:
-                    # result может быть списком или None
-                    if isinstance(status_data["result"], list) and len(status_data["result"]) > 0:
-                        status_info = status_data["result"][0]
-                        if status_info and status_info.get("err"):
-                            return {"valid": False, "error": f"Transaction failed: {status_info['err']}"}
-                        if status_info and not status_info.get("confirmationStatus"):
-                            print(f"Transaction status: {status_info}")
+                status_result = status_data.get("result")
+                if isinstance(status_result, dict):
+                    status_list = status_result.get("value")
+                else:
+                    status_list = status_result
+
+                if isinstance(status_list, list) and len(status_list) > 0:
+                    status_info = status_list[0]
+                    if status_info and status_info.get("err"):
+                        return {"valid": False, "error": f"Transaction failed: {status_info['err']}"}
+
+                    require_conf = os.getenv("TX_REQUIRE_CONFIRMATION_STATUS", "0").lower() in ("1", "true", "yes")
+                    if require_conf:
+                        allowed = [s.strip() for s in os.getenv("TX_ALLOWED_CONFIRMATION_STATUSES", "confirmed,finalized").split(",") if s.strip()]
+                        cs = status_info.get("confirmationStatus") if isinstance(status_info, dict) else None
+                        if not cs:
+                            return {"valid": False, "error": "Transaction not confirmed"}
+                        if cs not in allowed:
+                            return {"valid": False, "error": f"Transaction not confirmed: {cs}"}
+
+                    if status_info and not status_info.get("confirmationStatus"):
+                        print(f"Transaction status: {status_info}")
         except Exception as status_error:
             import traceback
             print(f"Error checking transaction status (non-critical): {status_error}")
