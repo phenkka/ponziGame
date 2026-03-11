@@ -116,20 +116,79 @@ async function dynamicImport(urls) {
 }
 
 function checkPhantomInstalled() {
-  return !!(window.solana && window.solana.isPhantom);
+  return !!getPhantomProvider();
+}
+
+let phantomConnectPromise = null;
+
+function getPhantomProvider() {
+  const p = window.phantom && window.phantom.solana;
+  if (p && p.isPhantom) return p;
+  if (window.solana && window.solana.isPhantom) return window.solana;
+  return null;
 }
 
 async function connectPhantom() {
   if (!checkPhantomInstalled()) {
     throw new Error('Phantom wallet is not installed. Please install the Phantom extension.');
   }
-  const response = await window.solana.connect();
-  return response.publicKey.toString();
+  if (phantomConnectPromise) {
+    return await phantomConnectPromise;
+  }
+
+  const provider = getPhantomProvider();
+  if (!provider) {
+    throw new Error('Phantom wallet provider not found');
+  }
+
+  phantomConnectPromise = (async () => {
+    if (provider.isConnected && provider.publicKey) {
+      return provider.publicKey.toString();
+    }
+
+    try {
+      const response = await provider.connect({ onlyIfTrusted: false });
+      return response.publicKey.toString();
+    } catch (err) {
+      const msg = (err && err.message) ? String(err.message) : '';
+      if (msg.toLowerCase().includes('unexpected error')) {
+        const response = await provider.connect();
+        return response.publicKey.toString();
+      }
+      throw err;
+    }
+  })();
+
+  try {
+    return await phantomConnectPromise;
+  } finally {
+    phantomConnectPromise = null;
+  }
+}
+
+function formatWalletError(error) {
+  if (!error) return 'Wallet connection error';
+  const msg = (typeof error === 'string') ? error : (error.message || error.toString());
+  const code = (error && typeof error === 'object' && 'code' in error) ? error.code : undefined;
+
+  if (code === 4001) return 'Connection cancelled in Phantom';
+  if (code === -32002) return 'Phantom request already pending. Open Phantom and approve/reject it.';
+  if (String(msg).toLowerCase().includes('namespace flags is not initialized')) {
+    return 'Phantom internal error (Namespace flags is not initialized). Update/reinstall Phantom, restart the browser, or try a fresh Chrome profile with only Phantom enabled.';
+  }
+  if (String(msg).toLowerCase().includes('unexpected error')) {
+    return 'Phantom: Unexpected error. Open Phantom and check for a pending connect request, unlock the wallet, and ensure pop-ups are allowed for this site. If it still fails, disable other Solana wallet extensions or restart the browser.';
+  }
+  return msg || 'Wallet connection error';
 }
 
 async function signMessage(message, publicKey) {
   const encodedMessage = new TextEncoder().encode(message);
-  const signature = await window.solana.signMessage(encodedMessage);
+  const provider = getPhantomProvider();
+  if (!provider) {
+    throw new Error('Phantom wallet provider not found');
+  }
+  const signature = await provider.signMessage(encodedMessage);
   return { signature: Array.from(signature.signature), publicKey };
 }
 
@@ -425,7 +484,7 @@ document.addEventListener('DOMContentLoaded', () => {
         } else {
           showMessage('Failed to check entry status');
         }
-      } catch (error) { console.error('Auth error:', error); showMessage(error.message || 'Wallet connection error'); }
+      } catch (error) { console.error('Auth error:', error); showMessage(formatWalletError(error)); }
       finally { button.disabled = false; button.textContent = 'CONNECT WALLET'; }
     });
   }
@@ -463,7 +522,7 @@ document.addEventListener('DOMContentLoaded', () => {
         } else {
           showMessage('Failed to check entry status');
         }
-      } catch (error) { console.error('Auth error:', error); showMessage(error.message || 'Wallet connection error'); }
+      } catch (error) { console.error('Auth error:', error); showMessage(formatWalletError(error)); }
       finally { button.disabled = false; button.textContent = 'CONNECT WALLET'; }
     });
   }
@@ -501,7 +560,7 @@ document.addEventListener('DOMContentLoaded', () => {
         } else {
           showMessage('Failed to check entry status');
         }
-      } catch (error) { console.error('Auth error:', error); showMessage(error.message || 'Wallet connection error'); }
+      } catch (error) { console.error('Auth error:', error); showMessage(formatWalletError(error)); }
       finally { button.disabled = false; button.textContent = 'OPEN FIRST PACK'; }
     });
   }
@@ -539,7 +598,7 @@ document.addEventListener('DOMContentLoaded', () => {
         } else {
           showMessage('Failed to check entry status');
         }
-      } catch (error) { console.error('Auth error:', error); showMessage(error.message || 'Wallet connection error'); }
+      } catch (error) { console.error('Auth error:', error); showMessage(formatWalletError(error)); }
       finally { button.disabled = false; button.textContent = 'CONNECT'; }
     });
   }
@@ -1550,7 +1609,7 @@ async function connectWallet() {
     } else {
       showMessage(data.error || 'Authentication error');
     }
-  } catch (error) { console.error('Connect wallet error:', error); showMessage(error.message || 'Wallet connection error'); }
+  } catch (error) { console.error('Connect wallet error:', error); showMessage(formatWalletError(error)); }
 }
 
 async function purchaseChest(idChest, chestsCache) {

@@ -53,7 +53,7 @@ services:
         condition: service_healthy
     environment:
       - PYTHONUNBUFFERED=1
-    command: python -u services/polymarket_sync.py --daemon --interval 3600 --target 10
+    command: python -u services/polymarket_sync.py --daemon --interval 300 --target 10 --mode top_popular
     restart: unless-stopped
     networks:
       - gamba

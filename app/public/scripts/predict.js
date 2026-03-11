@@ -3,95 +3,76 @@
 let selectedOutcome = null;
 let currentPredictionId = null;
 
-function normalizeRewardData(rewardData) {
-    if (!rewardData) return null;
-    if (typeof rewardData === 'string') {
-        try { return JSON.parse(rewardData); } catch { return null; }
-    }
-    return rewardData;
+async function fetchUserCardsForBet(wallet, headers) {
+    const resp = await fetch(`/api/user/${wallet}/cards?instances=true`, { headers, credentials: 'include' });
+    if (!resp.ok) return [];
+    const data = await resp.json();
+    if (!data?.success) return [];
+    return Array.isArray(data.cards) ? data.cards.filter(c => String(c.status || '') === 'available') : [];
 }
 
-function showBetRewardModal(bet) {
-    try {
-        const { body } = modalElements();
-        if (!body) return;
+async function showBetModal({ wallet, headers, predictionId, outcome }) {
+    const { body } = modalElements();
+    if (!body) return null;
 
-        const rewardType = bet.reward_type;
-        const rewardData = normalizeRewardData(bet.reward_data);
-
-        let contentHtml = '';
-        if (!rewardType || !rewardData) {
-            contentHtml = `<div style="font-family: 'Inter', sans-serif; font-size: 18px; opacity: .95;">Reward details are unavailable.</div>`;
-        } else if (rewardType === 'broken_packs' || rewardType === 'common_pack' || rewardType === 'legendary_pack') {
-            const idChest = Number(rewardData.id_chest);
-            const qty = Number(rewardData.quantity || 1);
-            contentHtml = `
-                <div style="display:flex; gap:14px; justify-content:center; flex-wrap:wrap; margin-top: 16px;">
-                    ${Array.from({ length: Math.min(qty, 6) }).map(() => `
-                        <div style="display:flex; flex-direction:column; align-items:center; gap:8px; padding:12px 14px; border-radius:12px; background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.08);">
-                            <img class="modal-image" style="width:120px; height:auto; margin:0;" src="img/${getPackImage(idChest)}" alt="pack">
-                            <div style="font-family:'Inter', sans-serif; font-size: 14px; opacity:.9;">${getPackLabel(idChest)}</div>
-                        </div>
-                    `).join('')}
-                </div>
-                ${qty > 6 ? `<div style="margin-top: 10px; opacity:.8; font-family:'Inter', sans-serif;">+${qty - 6} more</div>` : ''}
-            `;
-        } else if (rewardType === 'card') {
-            const rarity = String(rewardData.rarity || '').toUpperCase();
-            contentHtml = `
-                <div style="font-family: 'Inter', sans-serif; font-size: 18px; opacity: .95; margin-top: 10px;">You received a card</div>
-                <div style="font-family: 'Inter', sans-serif; font-size: 18px; font-weight: 700; margin-top: 6px;">${rarity || 'CARD'}</div>
-            `;
-        } else if (rewardType === 'boost') {
-            const boostValue = Number(rewardData.boost_value || 0);
-            contentHtml = `
-                <div style="font-family: 'Inter', sans-serif; font-size: 18px; opacity: .95; margin-top: 10px;">Boost activated</div>
-                <div style="font-family: 'Inter', sans-serif; font-size: 18px; font-weight: 700; margin-top: 6px;">+${boostValue}% to LEGENDARY drop chance (24h)</div>
-            `;
-        } else {
-            contentHtml = `<div style="font-family: 'Inter', sans-serif; font-size: 18px; opacity: .95;">Reward: ${escapeHtml(String(rewardType))}</div>`;
-        }
-
-        body.innerHTML = `
-            <div class="modal-title">Congratulations!</div>
-            <div style="font-family: 'Inter', sans-serif; font-size: 18px; opacity: .95;">You won this bet</div>
-            ${contentHtml}
-            <div class="modal-actions" style="margin-top: 18px;">
-                <button class="btn btn-primary" id="pm-ok">OK</button>
-            </div>
-        `;
-
-        openModal();
-        document.getElementById('pm-ok')?.addEventListener('click', async () => {
-            try {
-                const wallet = currentWallet || sessionStorage.getItem('wallet') || localStorage.getItem('wallet');
-                const signature = sessionStorage.getItem('signature') || '';
-                const message = sessionStorage.getItem('message') || '';
-
-                if (wallet && signature && message && bet && bet.bet_id) {
-                    const headers = {
-                        'X-Wallet': wallet,
-                        'X-Signature': signature,
-                        'X-Message': message,
-                        'Content-Type': 'application/json'
-                    };
-                    await fetch(`/api/predictions/claim/${bet.bet_id}`, {
-                        method: 'POST',
-                        headers,
-                        credentials: 'include'
-                    });
-                    bet.reward_claimed = true;
-                }
-            } catch (e) {
-                // ignore
-            } finally {
-                closeModal();
-                try { await loadUserBets(); } catch (e) {}
-            }
-        }, { once: true });
-    } catch (e) {
-        // If modal helpers are unavailable for any reason, silently ignore.
+    const cards = await fetchUserCardsForBet(wallet, headers);
+    if (!cards.length) {
+        showMessage('You need cards to place a bet', 'error');
+        return null;
     }
+
+    const options = cards
+        .map(c => {
+            const instanceId = Number(c.id_instance);
+            const cardId = Number(c.id_card);
+            const name = c.name ? ` - ${escapeHtml(String(c.name))}` : '';
+            const bounty = Number(c.bounty || c.start_bounty || 0);
+            return `<option value="${instanceId}">${cardId}${name} (bounty ${bounty}) #${instanceId}</option>`;
+        })
+        .join('');
+
+    body.innerHTML = `
+        <div class="modal-title">Place bet</div>
+        <div style="font-family:'Inter', sans-serif; font-size: 14px; opacity:.9; margin-top: 8px;">
+            Choose a card to stake
+        </div>
+        <div style="display:flex; flex-direction:column; gap:12px; margin-top: 16px;">
+            <div>
+                <div style="font-family:'Inter', sans-serif; font-size: 12px; opacity:.8; margin-bottom:6px;">Card</div>
+                <select id="bet-card-id" style="width:100%; padding:10px; border-radius:10px; background: rgba(255,255,255,.06); color: white; border: 1px solid rgba(255,255,255,.1);">
+                    ${options}
+                </select>
+            </div>
+        </div>
+        <div class="modal-actions" style="margin-top: 18px; display:flex; gap:10px; justify-content:center;">
+            <button class="btn" id="pm-cancel" type="button">Cancel</button>
+            <button class="btn btn-primary" id="pm-place" type="button">Place</button>
+        </div>
+    `;
+
+    const cardSelect = document.getElementById('bet-card-id');
+
+    return await new Promise((resolve) => {
+        openModal();
+        let resolved = false;
+        const cancelBtn = document.getElementById('pm-cancel');
+        const placeBtn = document.getElementById('pm-place');
+        cancelBtn?.addEventListener('click', (e) => { e?.preventDefault?.(); if (resolved) return; resolved = true; closeModal(); resolve(null); }, { once: true });
+        placeBtn?.addEventListener('click', (e) => {
+            e?.preventDefault?.();
+            e?.stopPropagation?.();
+            if (resolved) return;
+
+            const selected = Number(cardSelect?.value || 0);
+            if (!selected || !Number.isFinite(selected) || selected <= 0) { showMessage('Invalid card', 'error'); return; }
+
+            resolved = true;
+            if (placeBtn) placeBtn.disabled = true;
+            if (cancelBtn) cancelBtn.disabled = true;
+            closeModal();
+            resolve({ card_instance_id: selected, prediction_id: predictionId, chosen_outcome: outcome });
+        });
+    });
 }
 
 // Загрузка пари
@@ -165,13 +146,20 @@ async function loadPredictions(forceRefresh = false) {
         
         container.innerHTML = '';
         
+        const formatPercent = (v) => {
+            return (typeof v === 'number' && Number.isFinite(v)) ? `${v.toFixed(1)}%` : '--';
+        };
+
         data.markets.forEach(market => {
             const marketCard = document.createElement('div');
             marketCard.className = 'predict-market-card';
             marketCard.setAttribute('data-prediction-id', market.id_prediction);
             
             // Определяем цвет карточки на основе вероятностей (зеленый если близко к 50/50, красный если далеко)
-            const probDiff = Math.abs(market.outcome_a_probability - 50);
+            const probA = (typeof market.outcome_a_probability === 'number' && Number.isFinite(market.outcome_a_probability))
+                ? market.outcome_a_probability
+                : 50;
+            const probDiff = Math.abs(probA - 50);
             const cardColorClass = probDiff <= 5 ? 'predict-card-green' : probDiff <= 10 ? 'predict-card-yellow' : 'predict-card-red';
             
             marketCard.classList.add(cardColorClass);
@@ -182,11 +170,11 @@ async function loadPredictions(forceRefresh = false) {
                 <div class="predict-market-outcomes">
                     <button class="predict-outcome-btn" data-outcome="A" data-prediction-id="${market.id_prediction}">
                         <div>${escapeHtml(market.outcome_a)}</div>
-                        <div class="predict-outcome-probability" data-outcome="A">${market.outcome_a_probability.toFixed(1)}%</div>
+                        <div class="predict-outcome-probability" data-outcome="A">${formatPercent(market.outcome_a_probability)}</div>
                     </button>
                     <button class="predict-outcome-btn" data-outcome="B" data-prediction-id="${market.id_prediction}">
                         <div>${escapeHtml(market.outcome_b)}</div>
-                        <div class="predict-outcome-probability" data-outcome="B">${market.outcome_b_probability.toFixed(1)}%</div>
+                        <div class="predict-outcome-probability" data-outcome="B">${formatPercent(market.outcome_b_probability)}</div>
                     </button>
                 </div>
                 <button class="predict-bet-btn" data-prediction-id="${market.id_prediction}" disabled>
@@ -263,18 +251,33 @@ async function placeBet(predictionId, outcome, buttonElement) {
             headers['X-Signature'] = signature;
             headers['X-Message'] = message;
         }
-        
+
+        const betPayload = await showBetModal({ wallet, headers, predictionId, outcome });
+        if (!betPayload) {
+            buttonElement.disabled = false;
+            buttonElement.textContent = 'PLACE BET';
+            return;
+        }
+
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 15000);
         const response = await fetch(`/api/predictions/bet/${wallet}`, {
             method: 'POST',
             headers: headers,
             credentials: 'include',
-            body: JSON.stringify({
-                prediction_id: predictionId,
-                chosen_outcome: outcome
-            })
+            body: JSON.stringify(betPayload),
+            signal: controller.signal
         });
-        
-        const data = await response.json();
+        clearTimeout(timeoutId);
+
+        let data = null;
+        const contentType = response.headers.get('content-type') || '';
+        if (contentType.includes('application/json')) {
+            data = await response.json();
+        } else {
+            const text = await response.text();
+            data = { success: false, error: text || `HTTP ${response.status}` };
+        }
         
         if (data.success) {
             showMessage('Bet placed successfully!', 'success');
@@ -282,16 +285,27 @@ async function placeBet(predictionId, outcome, buttonElement) {
             await loadPredictions();
             await loadUserBets();
         } else {
-            showMessage(data.error || 'Failed to place bet', 'error');
-            buttonElement.disabled = false;
-            buttonElement.textContent = 'PLACE BET';
+            const rawError = (data && data.error) ? String(data.error) : '';
+            const isInstanceUnavailable = /card instance not available/i.test(rawError);
+            const msg = isInstanceUnavailable
+                ? 'This card is no longer available. Please choose another one.'
+                : (/card_id|card_quantity|card_instance_id/i.test(rawError)
+                    ? 'You need cards to place a bet'
+                    : (rawError || 'Failed to place bet'));
+            showMessage(msg, 'error');
         }
         
     } catch (error) {
         console.error('Error placing bet:', error);
-        showMessage('Error placing bet. Please try again.', 'error');
-        buttonElement.disabled = false;
-        buttonElement.textContent = 'PLACE BET';
+        const msg = (error && error.name === 'AbortError')
+            ? 'Bet request timed out. Please try again.'
+            : 'Error placing bet. Please try again.';
+        showMessage(msg, 'error');
+    } finally {
+        if (buttonElement) {
+            buttonElement.disabled = false;
+            buttonElement.textContent = 'PLACE BET';
+        }
     }
 }
 
@@ -350,6 +364,8 @@ async function loadUserBets() {
             const statusText = bet.status.charAt(0).toUpperCase() + bet.status.slice(1);
             
             const chosenText = bet.chosen_outcome === 'A' ? bet.outcome_a : bet.outcome_b;
+            const betTickets = (bet.bet_tickets !== undefined && bet.bet_tickets !== null) ? Number(bet.bet_tickets) : null;
+            const payoutTickets = (bet.payout_tickets !== undefined && bet.payout_tickets !== null) ? Number(bet.payout_tickets) : null;
             
             betCard.innerHTML = `
                 <div class="predict-bet-title">${escapeHtml(bet.title)}</div>
@@ -358,6 +374,8 @@ async function loadUserBets() {
                         ${escapeHtml(chosenText)}
                     </span>
                 </div>
+                ${Number.isFinite(betTickets) ? `<div style="margin-top: 10px; color: #ffffff; font-size: 14px; opacity: .95;">Stake: <strong>${Math.round(betTickets)}</strong> tickets</div>` : ''}
+                ${Number.isFinite(payoutTickets) ? `<div style="margin-top: 6px; color: #ffffff; font-size: 14px; opacity: .95;">Payout: <strong>${Math.round(payoutTickets)}</strong> tickets</div>` : ''}
                 <div style="margin-top: 15px;">
                     <span class="predict-bet-status ${statusClass}" style="
                         padding: 8px 16px;
@@ -366,8 +384,6 @@ async function loadUserBets() {
                         background: ${bet.status === 'won' ? '#4CAF50' : bet.status === 'lost' ? '#f44336' : bet.status === 'pending' ? '#FFC107' : '#9aa0a6'};
                         color: #000;
                     ">${statusText}</span>                    
-                    ${bet.reward_issued ? '<span style="color: #4CAF50; margin-left: 10px; font-weight: bold;">✓ Reward issued</span>' : ''}
-                    ${bet.reward_issued && bet.reward_claimed ? '<span style="color: #9aa0a6; margin-left: 10px; font-weight: bold;">✓ Claimed</span>' : ''}
                 </div>
                 <div style="margin-top: 15px; color: #9aa0a6; font-size: 12px;">
                     Placed: ${new Date(bet.created_at).toLocaleString()}
@@ -379,11 +395,6 @@ async function loadUserBets() {
                     </div>
                 ` : ''}
             `;
-
-            if (bet.status === 'won' && bet.reward_issued) {
-                betCard.style.cursor = 'pointer';
-                betCard.addEventListener('click', () => showBetRewardModal(bet));
-            }
             
             container.appendChild(betCard);
         });
@@ -428,23 +439,30 @@ function startProbabilityUpdates() {
             
             if (data.success && data.markets) {
                 // Обновляем проценты для каждого пари
+                const formatPercent = (v) => {
+                    return (typeof v === 'number' && Number.isFinite(v)) ? `${v.toFixed(1)}%` : '--';
+                };
+
                 data.markets.forEach(market => {
                     const card = document.querySelector(`.predict-market-card[data-prediction-id="${market.id_prediction}"]`);
                     if (card) {
                         // Обновляем процент для исхода A
                         const probA = card.querySelector('.predict-outcome-probability[data-outcome="A"]');
                         if (probA) {
-                            probA.textContent = `${market.outcome_a_probability.toFixed(1)}%`;
+                            probA.textContent = formatPercent(market.outcome_a_probability);
                         }
                         
                         // Обновляем процент для исхода B
                         const probB = card.querySelector('.predict-outcome-probability[data-outcome="B"]');
                         if (probB) {
-                            probB.textContent = `${market.outcome_b_probability.toFixed(1)}%`;
+                            probB.textContent = formatPercent(market.outcome_b_probability);
                         }
                         
                         // Обновляем цвет карточки на основе новых вероятностей
-                        const probDiff = Math.abs(market.outcome_a_probability - 50);
+                        const probAVal = (typeof market.outcome_a_probability === 'number' && Number.isFinite(market.outcome_a_probability))
+                            ? market.outcome_a_probability
+                            : 50;
+                        const probDiff = Math.abs(probAVal - 50);
                         card.classList.remove('predict-card-green', 'predict-card-yellow', 'predict-card-red');
                         if (probDiff <= 5) {
                             card.classList.add('predict-card-green');

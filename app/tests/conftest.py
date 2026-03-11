@@ -19,6 +19,8 @@ os.environ["POSTGRES_DB"] = "lab_test"
 # Отдельные тесты могут включать их через monkeypatch.setenv.
 os.environ["AUTH_CHALLENGE_REQUIRED"] = "0"
 os.environ["TX_REQUIRE_CONFIRMATION_STATUS"] = "0"
+os.environ["PREDICTIONS_SYNC_ENABLED"] = "0"
+os.environ["DEV_TEST_PREDICTION_ENABLED"] = "0"
 
 # Тестовые данные
 TEST_WALLET = "TestWallet1234567890123456789012345678901234567890"
@@ -124,6 +126,7 @@ def clean_db(db_connection):
         cursor.execute("DELETE FROM Referral_rewards")
         cursor.execute("DELETE FROM Chest_purchases")
         cursor.execute("DELETE FROM Card_trades")  # Очищаем историю трейдов
+        cursor.execute("DELETE FROM public.card_user_instances")
         cursor.execute("DELETE FROM Card_User")
         cursor.execute("DELETE FROM Referral_system")
         cursor.execute("DELETE FROM Jackpot_tickets_snapshot")  # Очищаем snapshot tickets
@@ -163,6 +166,7 @@ def clean_db(db_connection):
         cursor.execute("DELETE FROM Referral_rewards")
         cursor.execute("DELETE FROM Chest_purchases")
         cursor.execute("DELETE FROM Card_trades")  # Очищаем историю трейдов
+        cursor.execute("DELETE FROM public.card_user_instances")
         cursor.execute("DELETE FROM Card_User")
         cursor.execute("DELETE FROM Referral_system")
         cursor.execute("DELETE FROM Jackpot_tickets_snapshot")  # Очищаем snapshot tickets

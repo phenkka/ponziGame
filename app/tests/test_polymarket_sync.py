@@ -5,15 +5,19 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import patch, MagicMock, Mock
 import json
 from psycopg2.extras import RealDictCursor
+from nacl.signing import SigningKey
+import base58
 
 # Добавляем родительскую директорию в путь для импорта
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from services.polymarket_sync import (
     fetch_polymarket_markets,
+    fetch_polymarket_top_popular_markets,
     save_markets_to_db,
     mark_resolved_predictions,
     sync_polymarket_markets,
+    sync_polymarket_top_popular_markets,
     get_active_predictions_count,
     get_db_connection
 )
@@ -89,6 +93,35 @@ class TestPolymarketSyncAPI:
         
         # Проверяем, что вернулся пустой список
         assert markets == []
+
+    @patch('services.polymarket_sync.requests.get')
+    def test_fetch_top_popular_markets_sorted_and_odds(self, mock_get, db_connection):
+        if db_connection is None:
+            pytest.skip("Database not available")
+
+        now = datetime.now(timezone.utc)
+        payload = []
+        for i in range(12):
+            payload.append({
+                "id": f"m-{i}",
+                "question": f"Q{i}",
+                "closed": False,
+                "outcomePrices": [0.25, 0.75],
+                "endDate": (now + timedelta(days=10)).isoformat(),
+                "volume24hr": float(i),
+                "outcomes": [{"title": "Yes"}, {"title": "No"}]
+            })
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = payload
+        mock_get.return_value = mock_response
+
+        top = fetch_polymarket_top_popular_markets(target_count=10, max_fetch=500)
+        assert len(top) == 10
+        assert top[0]["polymarket_id"] == "m-11"
+        assert abs(top[0]["outcome_a_odds"] - 4.0) < 1e-9
+        assert abs(top[0]["outcome_b_odds"] - (100.0 / 75.0)) < 1e-9
     
     @patch('services.polymarket_sync.requests.get')
     def test_fetch_markets_timeout(self, mock_get, db_connection):
@@ -162,6 +195,76 @@ class TestPolymarketSyncDatabase:
         assert prediction is not None
         assert prediction['polymarket_id'] == "test-market-1"
         assert prediction['title'] == "Test Prediction 1"
+        cursor.close()
+
+    @patch('services.polymarket_sync.fetch_polymarket_top_popular_markets')
+    @patch('services.polymarket_sync.mark_resolved_predictions')
+    def test_sync_top_popular_cancels_missing_without_bets(self, mock_mark_resolved, mock_fetch, clean_db, db_connection):
+        if db_connection is None:
+            pytest.skip("Database not available")
+
+        cursor = db_connection.cursor()
+        cursor.execute("""
+            INSERT INTO public.predictions (
+                polymarket_id, title, outcome_a, outcome_b,
+                outcome_a_probability, outcome_b_probability,
+                resolution_date, volume_24h, status
+            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        """, ("old", "Old", "Yes", "No", 50.0, 50.0, datetime.now(timezone.utc) + timedelta(days=10), 1.0, "active"))
+
+        cursor.execute("""
+            INSERT INTO public.predictions (
+                polymarket_id, title, outcome_a, outcome_b,
+                outcome_a_probability, outcome_b_probability,
+                resolution_date, volume_24h, status
+            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            RETURNING id_prediction
+        """, ("keep", "Keep", "Yes", "No", 50.0, 50.0, datetime.now(timezone.utc) + timedelta(days=10), 2.0, "active"))
+        keep_id = cursor.fetchone()[0]
+
+        cursor.execute("""
+            INSERT INTO Users (wallet, ref_code) VALUES (%s, %s) RETURNING id_user
+        """, ("somewallet", "CODE"))
+        user_id = cursor.fetchone()[0]
+
+        cursor.execute("""
+            INSERT INTO public.user_bets (id_user, id_prediction, chosen_outcome, status)
+            VALUES (%s, %s, %s, %s)
+        """, (user_id, keep_id, "A", "pending"))
+
+        db_connection.commit()
+        cursor.close()
+
+        mock_fetch.return_value = [
+            {
+                "polymarket_id": "keep",
+                "title": "Keep",
+                "description": "",
+                "category": "test",
+                "outcome_a": "Yes",
+                "outcome_b": "No",
+                "outcome_a_probability": 50.0,
+                "outcome_b_probability": 50.0,
+                "outcome_a_odds": 2.0,
+                "outcome_b_odds": 2.0,
+                "resolution_date": datetime.now(timezone.utc) + timedelta(days=10),
+                "volume_24h": 999.0,
+                "volume_7d": 0.0,
+                "volume_30d": 0.0
+            }
+        ]
+        mock_mark_resolved.return_value = None
+
+        sync_polymarket_top_popular_markets(target_count=1)
+
+        cursor = db_connection.cursor(cursor_factory=RealDictCursor)
+        cursor.execute("SELECT status FROM public.predictions WHERE polymarket_id = 'old'")
+        assert cursor.fetchone()['status'] == 'cancelled'
+
+        cursor.execute("SELECT status, outcome_a_odds FROM public.predictions WHERE polymarket_id = 'keep'")
+        row = cursor.fetchone()
+        assert row['status'] == 'active'
+        assert float(row['outcome_a_odds']) == 2.0
         cursor.close()
     
     def test_update_existing_markets(self, clean_db, db_connection):
@@ -264,8 +367,6 @@ class TestPolymarketSyncDatabase:
         cursor = db_connection.cursor(cursor_factory=RealDictCursor)
         
         # Создаем пользователя
-        from nacl.signing import SigningKey
-        import base58
         signing_key = SigningKey.generate()
         verify_key = signing_key.verify_key
         wallet = base58.b58encode(verify_key.encode()).decode('utf-8')
@@ -281,20 +382,21 @@ class TestPolymarketSyncDatabase:
         cursor.execute("""
             INSERT INTO public.predictions (
                 polymarket_id, title, outcome_a, outcome_b, 
-                outcome_a_probability, outcome_b_probability, 
+                outcome_a_probability, outcome_b_probability,
+                outcome_a_odds, outcome_b_odds,
                 resolution_date, status
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id_prediction
-        """, ("test-reward-1", "Reward Test Prediction", "Yes", "No", 60.0, 40.0, past_date, "active"))
+        """, ("test-reward-1", "Reward Test Prediction", "Yes", "No", 60.0, 40.0, 2.0, 1.5, past_date, "active"))
         prediction = cursor.fetchone()
         prediction_id = prediction['id_prediction']
         
         # Создаем выигрышную ставку (пользователь выбрал A, а A более вероятен)
         cursor.execute("""
-            INSERT INTO public.user_bets (id_user, id_prediction, chosen_outcome, status)
-            VALUES (%s, %s, %s, %s)
+            INSERT INTO public.user_bets (id_user, id_prediction, chosen_outcome, status, bet_tickets)
+            VALUES (%s, %s, %s, %s, %s)
             RETURNING id_bet
-        """, (user_id, prediction_id, "A", "pending"))
+        """, (user_id, prediction_id, "A", "pending", 101))
         bet = cursor.fetchone()
         bet_id = bet['id_bet']
         
@@ -309,9 +411,9 @@ class TestPolymarketSyncDatabase:
         user_id2 = user2['id_user']
         
         cursor.execute("""
-            INSERT INTO public.user_bets (id_user, id_prediction, chosen_outcome, status)
-            VALUES (%s, %s, %s, %s)
-        """, (user_id2, prediction_id, "B", "pending"))
+            INSERT INTO public.user_bets (id_user, id_prediction, chosen_outcome, status, bet_tickets)
+            VALUES (%s, %s, %s, %s, %s)
+        """, (user_id2, prediction_id, "B", "pending", 101))
         
         db_connection.commit()
         cursor.close()
@@ -329,49 +431,93 @@ class TestPolymarketSyncDatabase:
         assert prediction_result['status'] == 'resolved'
         assert prediction_result['winner_outcome'] == 'A'  # A более вероятен (60% vs 40%)
         
-        # Проверяем, что выигрышная ставка помечена как won и награда выдана
+        # Проверяем, что выигрышная ставка помечена как won и выплата начислена
         cursor.execute("""
-            SELECT status, reward_issued, reward_type FROM public.user_bets 
+            SELECT status, payout_tickets FROM public.user_bets 
             WHERE id_bet = %s
         """, (bet_id,))
         bet_result = cursor.fetchone()
         assert bet_result['status'] == 'won'
-        assert bet_result['reward_issued'] is True
-        assert bet_result['reward_type'] is not None  # Должен быть тип награды
+        assert bet_result.get('payout_tickets') is not None
+        assert int(bet_result.get('payout_tickets') or 0) > 0
         
         # Проверяем, что проигрышная ставка помечена как lost
         cursor.execute("""
-            SELECT status, reward_issued FROM public.user_bets 
+            SELECT status, payout_tickets FROM public.user_bets 
             WHERE id_user = %s AND id_prediction = %s
         """, (user_id2, prediction_id))
         losing_bet = cursor.fetchone()
         assert losing_bet['status'] == 'lost'
-        assert losing_bet['reward_issued'] is False
-        
-        # Проверяем, что награда действительно выдана (пак, карта или буст)
-        cursor.execute("""
-            SELECT COUNT(*) as count FROM Chest_purchases WHERE id_user = %s
-        """, (user_id,))
-        chests = cursor.fetchone()
-        chest_count = chests['count'] if chests else 0
-        
-        cursor.execute("""
-            SELECT COUNT(*) as count FROM Card_User WHERE id_user = %s
-        """, (user_id,))
-        cards = cursor.fetchone()
-        card_count = cards['count'] if cards else 0
-        
-        cursor.execute("""
-            SELECT COUNT(*) as count FROM User_boost WHERE id_user = %s AND is_active = TRUE
-        """, (user_id,))
-        boosts = cursor.fetchone()
-        boost_count = boosts['count'] if boosts else 0
-        
-        # Должна быть выдана хотя бы одна награда
-        assert (chest_count > 0) or (card_count > 0) or (boost_count > 0), \
-            f"Reward not issued: chests={chest_count}, cards={card_count}, boosts={boost_count}"
+        assert losing_bet.get('payout_tickets') is None
+
+        cursor.execute("SELECT tickets_bonus FROM public.users WHERE id_user = %s", (user_id,))
+        user_row = cursor.fetchone()
+        assert user_row is not None
+        assert int(user_row.get('tickets_bonus') or 0) > 0
         
         cursor.close()
+
+    def test_mark_resolved_predictions_idempotent_no_double_payout(self, clean_db, db_connection):
+        if db_connection is None:
+            pytest.skip("Database not available")
+
+        cursor = db_connection.cursor(cursor_factory=RealDictCursor)
+        signing_key = SigningKey.generate()
+        wallet = base58.b58encode(signing_key.verify_key.encode()).decode('utf-8')
+        cursor.execute("INSERT INTO Users (wallet, ref_code) VALUES (%s, %s) RETURNING id_user", (wallet, "TESTCODE"))
+        user_id = cursor.fetchone()['id_user']
+
+        past_date = datetime.now(timezone.utc) - timedelta(days=1)
+        cursor.execute("""
+            INSERT INTO public.predictions (
+                polymarket_id, title, outcome_a, outcome_b,
+                outcome_a_probability, outcome_b_probability,
+                outcome_a_odds, outcome_b_odds,
+                resolution_date, status
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id_prediction
+        """, ("test-idem-auto-1", "Resolved", "Yes", "No", 60.0, 40.0, 2.0, 1.5, past_date, "active"))
+        prediction_id = cursor.fetchone()['id_prediction']
+
+        cursor.execute("""
+            INSERT INTO public.user_bets (id_user, id_prediction, chosen_outcome, status, bet_tickets)
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING id_bet
+        """, (user_id, prediction_id, "A", "pending", 101))
+        bet_id = cursor.fetchone()['id_bet']
+
+        db_connection.commit()
+        cursor.close()
+
+        mark_resolved_predictions()
+
+        cur = db_connection.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SELECT tickets_bonus FROM public.users WHERE id_user = %s", (user_id,))
+        bonus_1 = int(cur.fetchone().get('tickets_bonus') or 0)
+        cur.execute("SELECT payout_tickets, status FROM public.user_bets WHERE id_bet = %s", (bet_id,))
+        bet_1 = cur.fetchone()
+        payout_1 = int(bet_1.get('payout_tickets') or 0)
+        status_1 = bet_1.get('status')
+        cur.close()
+
+        assert bonus_1 > 0
+        assert payout_1 > 0
+        assert status_1 in ('won', 'lost', 'cancelled')
+
+        mark_resolved_predictions()
+
+        cur = db_connection.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SELECT tickets_bonus FROM public.users WHERE id_user = %s", (user_id,))
+        bonus_2 = int(cur.fetchone().get('tickets_bonus') or 0)
+        cur.execute("SELECT payout_tickets, status FROM public.user_bets WHERE id_bet = %s", (bet_id,))
+        bet_2 = cur.fetchone()
+        payout_2 = int(bet_2.get('payout_tickets') or 0)
+        status_2 = bet_2.get('status')
+        cur.close()
+
+        assert bonus_2 == bonus_1
+        assert payout_2 == payout_1
+        assert status_2 == status_1
     
     def test_get_active_predictions_count(self, clean_db, db_connection):
         """Тест: получение количества активных пари"""

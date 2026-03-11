@@ -506,7 +506,9 @@ def get_user_tickets(cursor, user_id: int) -> int:
     """Подсчитывает общее количество tickets пользователя из всех его карт.
     Учитываются только карты из КУПЛЕННЫХ паков, бонусные паки исключаются."""
     cursor.execute("""
-        SELECT COALESCE(SUM(cu.quantity * c.start_bounty), 0) as total_tickets
+        SELECT
+            COALESCE(SUM(cu.quantity * c.start_bounty), 0) as card_tickets,
+            COALESCE((SELECT tickets_bonus FROM Users WHERE id_user = %s), 0) as bonus_tickets
         FROM Card_User cu
         JOIN Cards c ON cu.id_card = c.id_card
         LEFT JOIN Chest_openings co ON cu.id_opening = co.id_opening
@@ -521,9 +523,13 @@ def get_user_tickets(cursor, user_id: int) -> int:
              AND cp.tx_signature NOT LIKE 'prediction_reward_%%'
              AND cp.tx_signature NOT LIKE 'daily_checkin_%%')
           )
-    """, (user_id,))
+    """, (user_id, user_id))
     result = cursor.fetchone()
-    return int(result["total_tickets"]) if result and result["total_tickets"] else 0
+    if not result:
+        return 0
+    card_tickets = int(result.get("card_tickets") or 0)
+    bonus_tickets = int(result.get("bonus_tickets") or 0)
+    return card_tickets + bonus_tickets
 
 
 def get_or_create_active_round(cursor, conn) -> dict:
@@ -586,7 +592,7 @@ def save_tickets_snapshot(cursor, conn, round_id: int, snapshot_time):
     
     cursor.execute("""
         SELECT u.id_user, u.wallet,
-               COALESCE(SUM(cu.quantity * c.start_bounty), 0) as total_tickets
+               COALESCE(SUM(cu.quantity * c.start_bounty), 0) + COALESCE(u.tickets_bonus, 0) as total_tickets
         FROM Users u
         INNER JOIN Card_User cu ON u.id_user = cu.id_user
         INNER JOIN Cards c ON cu.id_card = c.id_card
@@ -602,8 +608,8 @@ def save_tickets_snapshot(cursor, conn, round_id: int, snapshot_time):
              AND cp.tx_signature NOT LIKE 'prediction_reward_%%'
              AND cp.tx_signature NOT LIKE 'daily_checkin_%%')
           )
-        GROUP BY u.id_user, u.wallet
-        HAVING COALESCE(SUM(cu.quantity * c.start_bounty), 0) > 0
+        GROUP BY u.id_user, u.wallet, u.tickets_bonus
+        HAVING COALESCE(SUM(cu.quantity * c.start_bounty), 0) + COALESCE(u.tickets_bonus, 0) > 0
     """, (snapshot_date,))
     participants = cursor.fetchall()
     
@@ -1214,92 +1220,7 @@ def issue_prediction_reward(cursor, conn, user_id: int) -> tuple:
     - 20% - карточка Common или Rare
     - 5% - персональное увеличение шансов на 24 часа (+10% к шансу выпадения legendary)
     """
-    import random
-    from datetime import datetime, timedelta
-    import json
-    
-    rewards_issued = []
-    reward_type = None
-    reward_data = None
-    
-    # Генерируем награду на основе вероятностей
-    roll = random.random() * 100
-    
-    if roll < 40:  # 40% - 3 broken пака (id_chest = 5)
-        reward_type = "broken_packs"
-        reward_data = {"quantity": 3, "id_chest": 5}
-        # Выдаем 3 broken пака
-        for _ in range(3):
-            cursor.execute("""
-                INSERT INTO Chest_purchases (id_user, id_chest, tx_signature)
-                VALUES (%s, %s, %s)
-            """, (user_id, 5, f"prediction_reward_{user_id}_{random.randint(100000, 999999)}"))
-        rewards_issued.append({"type": "broken_packs", "quantity": 3})
-    
-    elif roll < 65:  # 25% - 1 Common пак (id_chest = 1)
-        reward_type = "common_pack"
-        reward_data = {"quantity": 1, "id_chest": 1}
-        cursor.execute("""
-            INSERT INTO Chest_purchases (id_user, id_chest, tx_signature)
-            VALUES (%s, %s, %s)
-        """, (user_id, 1, f"prediction_reward_{user_id}_{random.randint(100000, 999999)}"))
-        rewards_issued.append({"type": "common_pack", "quantity": 1})
-    
-    elif roll < 75:  # 10% - 1 Legendary пак (id_chest = 4)
-        reward_type = "legendary_pack"
-        reward_data = {"quantity": 1, "id_chest": 4}
-        cursor.execute("""
-            INSERT INTO Chest_purchases (id_user, id_chest, tx_signature)
-            VALUES (%s, %s, %s)
-        """, (user_id, 4, f"prediction_reward_{user_id}_{random.randint(100000, 999999)}"))
-        rewards_issued.append({"type": "legendary_pack", "quantity": 1})
-    
-    elif roll < 95:  # 20% - карточка Common или Rare
-        reward_type = "card"
-        # Выбираем случайную редкость: 60% Common, 40% Rare
-        card_rarity = "basic" if random.random() < 0.6 else "rare"
-        reward_data = {"rarity": card_rarity}
-        
-        # Выдаем случайную карту указанной редкости
-        card = get_random_card_by_rarity(card_rarity, cursor)
-        if card:
-            cursor.execute("""
-                INSERT INTO Card_User (id_user, id_card, quantity)
-                VALUES (%s, %s, 1)
-                ON CONFLICT (id_user, id_card) DO UPDATE SET quantity = Card_User.quantity + 1
-            """, (user_id, card['id_card']))
-            rewards_issued.append({
-                "type": "card",
-                "card_id": card['id_card'],
-                "card_name": card.get('name'),
-                "rarity": card_rarity
-            })
-    
-    else:  # 5% - персональное увеличение шансов на 24 часа (+10% к шансу выпадения legendary)
-        reward_type = "boost"
-        expires_at = datetime.now() + timedelta(hours=24)
-        reward_data = {
-            "boost_type": "legendary_chance",
-            "boost_value": 10.0,
-            "expires_at": expires_at.isoformat()
-        }
-        
-        # Сохраняем boost в БД
-        cursor.execute("""
-            INSERT INTO User_boost (id_user, boost_type, boost_value, expires_at)
-            VALUES (%s, %s, %s, %s)
-        """, (user_id, "legendary_chance", 10.0, expires_at))
-        
-        rewards_issued.append({
-            "type": "boost",
-            "boost_type": "legendary_chance",
-            "boost_value": 10.0,
-            "expires_at": expires_at.isoformat()
-        })
-    
-    conn.commit()
-    
-    return (rewards_issued, reward_type, reward_data)
+    return ([], None, None)
 
 
 def get_user_active_boost(cursor, user_id: int) -> dict:

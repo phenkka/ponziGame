@@ -9,9 +9,10 @@ import requests
 import secrets
 import re
 from datetime import datetime, timedelta
+import math
 
 from core.models import AuthRequest
-from core.utils import get_db_connection, generate_ref_code, verify_solana_signature, verify_solana_transaction, HELIUS_RPC_URL, determine_card_rarity, get_random_card_by_rarity, get_or_create_active_round, add_to_jackpot, draw_jackpot, add_to_super_jackpot, claim_super_jackpot, get_or_create_active_super_jackpot_round, get_today_daily_code, get_user_checkin_status, process_daily_checkin, get_user_active_boost, issue_prediction_reward
+from core.utils import get_db_connection, generate_ref_code, verify_solana_signature, verify_solana_transaction, HELIUS_RPC_URL, determine_card_rarity, get_random_card_by_rarity, get_or_create_active_round, add_to_jackpot, draw_jackpot, add_to_super_jackpot, claim_super_jackpot, get_or_create_active_super_jackpot_round, get_today_daily_code, get_user_checkin_status, process_daily_checkin, get_user_active_boost
 from core.auth import verify_auth
 from pydantic import BaseModel
 
@@ -268,7 +269,7 @@ def setup_api_routes(app):
             import traceback
             traceback.print_exc()
             return JSONResponse(status_code=500, content={"success": False, "error": "Failed to issue challenge"})
-    
+
     @app.get("/api/user/{wallet}")
     async def get_user(wallet: str, request: Request):
         # Проверяем авторизацию через заголовки или cookie
@@ -289,12 +290,9 @@ def setup_api_routes(app):
                             status_code=403,
                             detail="Access denied. You can only access your own data."
                         )
-                    # Используем wallet из auth_data
-                    wallet = auth_data["wallet"]
                 except HTTPException:
                     raise
-                except Exception as e:
-                    print(f"Cookie auth failed in get_user: {e}")
+                except Exception:
                     raise HTTPException(
                         status_code=401,
                         detail="Invalid session. Please reconnect your wallet."
@@ -351,7 +349,7 @@ def setup_api_routes(app):
                 "success": False,
                 "error": str(e)
             }
-    
+
     @app.get("/api/jackpot")
     async def get_jackpot():
         try:
@@ -397,7 +395,7 @@ def setup_api_routes(app):
                 "amount": 0,
                 "timeLeft": 86400
             }
-    
+
     @app.get("/api/jackpot/last")
     async def get_last_jackpot():
         try:
@@ -441,7 +439,7 @@ def setup_api_routes(app):
                 "error": str(e),
                 "lastJackpot": None
             }
-    
+
     @app.post("/api/jackpot/draw")
     async def draw_jackpot_endpoint():
         try:
@@ -467,7 +465,7 @@ def setup_api_routes(app):
                 "error": str(e),
                 "drawn_rounds": []
             }
-    
+
     @app.get("/api/chests")
     async def get_chests():
         try:
@@ -500,7 +498,7 @@ def setup_api_routes(app):
                 "error": str(e),
                 "chests": []
             }
-    
+
     @app.get("/api/user/{wallet}/chests")
     async def get_user_chests(wallet: str, request: Request):
         # Проверяем авторизацию
@@ -567,7 +565,7 @@ def setup_api_routes(app):
                 "error": str(e),
                 "chests": []
             }
-    
+
     @app.get("/api/balance/{wallet}")
     async def get_balance(wallet: str, request: Request):
         # Проверяем авторизацию
@@ -672,9 +670,9 @@ def setup_api_routes(app):
                     "symbol": "TOKENS"
                 }
             }
-    
+
     @app.get("/api/user/{wallet}/cards")
-    async def get_user_cards(wallet: str, request: Request):
+    async def get_user_cards(wallet: str, request: Request, instances: bool = False):
         # Проверяем авторизацию
         x_wallet = request.headers.get("X-Wallet")
         x_signature = request.headers.get("X-Signature")
@@ -712,20 +710,78 @@ def setup_api_routes(app):
                 conn.close()
                 return {"success": False, "error": "User not found", "cards": []}
             
-            # Получаем карты пользователя
-            cursor.execute("""
-                SELECT c.id_card, c.rarity, c.start_bounty, c.name, c.image_url, c.image_key,
-                       COALESCE(cu.quantity, 0) as quantity
-                FROM Cards c
-                LEFT JOIN Card_User cu ON c.id_card = cu.id_card AND cu.id_user = %s
-                WHERE cu.quantity > 0 OR cu.id_user IS NULL
-                ORDER BY c.rarity, c.id_card
-            """, (user['id_user'],))
-            cards = cursor.fetchall()
+            if instances:
+                cursor.execute("""
+                    SELECT cu.id_card, cu.quantity::int AS quantity, c.start_bounty::int AS start_bounty
+                    FROM public.card_user cu
+                    JOIN public.cards c ON c.id_card = cu.id_card
+                    WHERE cu.id_user = %s AND cu.quantity > 0
+                """, (user['id_user'],))
+                owned_rows = cursor.fetchall()
+
+                for r in owned_rows:
+                    id_card = int(r['id_card'])
+                    qty_available = int(r.get('quantity') or 0)
+                    start_bounty = int(r.get('start_bounty') or 0)
+
+                    cursor.execute("""
+                        WITH inst AS (
+                            SELECT
+                                COUNT(*) FILTER (WHERE status IN ('available','staked'))::int AS total_cnt,
+                                COUNT(*) FILTER (WHERE status = 'staked')::int AS staked_cnt
+                            FROM public.card_user_instances
+                            WHERE id_user = %s AND id_card = %s
+                        ),
+                        need AS (
+                            SELECT GREATEST((%s + inst.staked_cnt) - inst.total_cnt, 0)::int AS missing
+                            FROM inst
+                        )
+                        INSERT INTO public.card_user_instances (id_user, id_card, bounty, status)
+                        SELECT %s, %s, %s, 'available'
+                        FROM need, generate_series(1, need.missing)
+                    """, (user['id_user'], id_card, qty_available, user['id_user'], id_card, start_bounty))
+
+                conn.commit()
+
+                cursor.execute("""
+                    SELECT
+                        i.id_instance,
+                        c.id_card,
+                        c.rarity,
+                        c.start_bounty,
+                        c.name,
+                        c.image_url,
+                        c.image_key,
+                        i.bounty,
+                        i.status
+                    FROM public.card_user_instances i
+                    JOIN public.cards c ON c.id_card = i.id_card
+                    WHERE i.id_user = %s
+                      AND i.status IN ('available', 'staked')
+                    ORDER BY c.rarity, c.id_card, i.bounty, i.id_instance
+                """, (user['id_user'],))
+                cards = cursor.fetchall()
+            else:
+                # Получаем карты пользователя
+                cursor.execute("""
+                    SELECT c.id_card, c.rarity, c.start_bounty, c.name, c.image_url, c.image_key,
+                           COALESCE(cu.quantity, 0) as quantity
+                    FROM Cards c
+                    LEFT JOIN Card_User cu ON c.id_card = cu.id_card AND cu.id_user = %s
+                    WHERE cu.quantity > 0 OR cu.id_user IS NULL
+                    ORDER BY c.rarity, c.id_card
+                """, (user['id_user'],))
+                cards = cursor.fetchall()
             
             cursor.close()
             conn.close()
             
+            if instances:
+                return {
+                    "success": True,
+                    "cards": [dict(card) for card in cards]
+                }
+
             return {
                 "success": True,
                 "cards": [dict(card) for card in cards if card['quantity'] > 0]
@@ -739,7 +795,7 @@ def setup_api_routes(app):
                 "error": str(e),
                 "cards": []
             }
-    
+
     @app.get("/api/cards")
     async def get_cards(rarity: str = None, hasImage: bool = None):
         try:
@@ -775,7 +831,7 @@ def setup_api_routes(app):
                 "error": str(e),
                 "cards": []
             }
-    
+
     @app.get("/api/config")
     async def get_config():
         """Получить конфигурацию для клиента"""
@@ -798,7 +854,7 @@ def setup_api_routes(app):
             "merchant": merchant if merchant else "11111111111111111111111111111111",
             "mint": mint  # Адрес токена TOKENS
         }
-    
+
     @app.get("/api/super-jackpot")
     async def get_super_jackpot():
         """Получить информацию о текущем супер джекпоте"""
@@ -840,7 +896,7 @@ def setup_api_routes(app):
                 "error": str(e),
                 "amount": 0
             }
-    
+
     @app.post("/api/cards/trade")
     async def trade_cards(request: Request):
         """Обмен карт: несколько карт одной редкости на одну карту той же редкости"""
@@ -869,7 +925,11 @@ def setup_api_routes(app):
                     )
             else:
                 try:
-                    auth_data = await verify_auth(x_wallet=x_wallet, x_signature=x_signature, x_message=x_message)
+                    auth_data = await verify_auth(
+                        x_wallet=x_wallet,
+                        x_signature=x_signature,
+                        x_message=x_message
+                    )
                 except HTTPException as e:
                     return JSONResponse(
                         status_code=e.status_code,
@@ -927,7 +987,7 @@ def setup_api_routes(app):
             
             user_id = user['id_user']
             
-            # Проверяем, что у пользователя достаточно карт и они правильной редкости
+            # Проверяем, что у пользователя есть все выбранные карты
             for card_data in cards:
                 id_card = card_data.get('id_card')
                 quantity = card_data.get('quantity', 0)
@@ -1047,88 +1107,6 @@ def setup_api_routes(app):
                 content={"success": False, "error": f"Internal error: {str(e)}"}
             )
 
-    @app.post("/api/predictions/claim/{bet_id}")
-    async def claim_prediction_reward(bet_id: int, request: Request):
-        """Отметить награду по выигранной ставке как забранную (идемпотентно)."""
-        try:
-            # Берем wallet из middleware (или fallback на заголовки)
-            auth_wallet = None
-            if request and hasattr(request.state, 'user'):
-                auth_wallet = request.state.user.get('wallet')
-
-            if not auth_wallet:
-                x_wallet = request.headers.get("X-Wallet")
-                x_signature = request.headers.get("X-Signature")
-                x_message = request.headers.get("X-Message")
-                if x_wallet and x_signature and x_message:
-                    auth_data = await verify_auth(x_wallet=x_wallet, x_signature=x_signature, x_message=x_message)
-                    auth_wallet = auth_data.get("wallet")
-
-            if not auth_wallet:
-                return JSONResponse(status_code=401, content={"success": False, "error": "Unauthorized"})
-
-            conn = get_db_connection()
-            cursor = conn.cursor(cursor_factory=RealDictCursor)
-
-            # Получаем id_user по wallet
-            cursor.execute("SELECT id_user FROM Users WHERE wallet = %s", (auth_wallet,))
-            user = cursor.fetchone()
-            if not user:
-                cursor.close()
-                conn.close()
-                return JSONResponse(status_code=401, content={"success": False, "error": "Unauthorized"})
-            user_id = user['id_user']
-
-            # Проверяем ставку и ownership
-            cursor.execute("""
-                SELECT id_bet, id_user, status, reward_issued, reward_claimed
-                FROM public.user_bets
-                WHERE id_bet = %s
-            """, (bet_id,))
-            bet = cursor.fetchone()
-            if not bet:
-                cursor.close()
-                conn.close()
-                return JSONResponse(status_code=404, content={"success": False, "error": "Bet not found"})
-
-            if bet['id_user'] != user_id:
-                cursor.close()
-                conn.close()
-                return JSONResponse(status_code=403, content={"success": False, "error": "Forbidden"})
-
-            # Разрешаем claim только если ставка выиграна и награда была выдана
-            if bet.get('status') != 'won' or not bet.get('reward_issued'):
-                cursor.close()
-                conn.close()
-                return JSONResponse(status_code=400, content={"success": False, "error": "Reward not available"})
-
-            already_claimed = bool(bet.get('reward_claimed'))
-            if not already_claimed:
-                cursor.execute("""
-                    UPDATE public.user_bets
-                    SET reward_claimed = TRUE,
-                        reward_claimed_at = now()
-                    WHERE id_bet = %s
-                """, (bet_id,))
-                conn.commit()
-
-            cursor.close()
-            conn.close()
-
-            return {
-                "success": True,
-                "bet_id": bet_id,
-                "already_claimed": already_claimed
-            }
-
-        except HTTPException:
-            raise
-        except Exception as e:
-            print(f"Claim prediction reward error: {e}")
-            import traceback
-            traceback.print_exc()
-            return JSONResponse(status_code=500, content={"success": False, "error": f"Internal error: {str(e)}"})
-    
     @app.post("/api/chests/buy")
     async def buy_chest(request: Request):
         """Покупка пака с проверкой транзакции"""
@@ -1346,7 +1324,7 @@ def setup_api_routes(app):
                 status_code=500,
                 content={"success": False, "error": f"Internal error: {str(e)}"}
             )
-    
+
     @app.post("/api/chests/open")
     async def open_chest(request: Request):
         try:
@@ -1547,8 +1525,8 @@ def setup_api_routes(app):
                 "lost": False,
                 "rarity": rarity,
                 "card_id": card['id_card'],
-                "card_name": card.get('name', ''),
-                "image_url": card.get('image_url', ''),
+                "card_name": card.get('name'),
+                "image_url": card.get('image_url'),
                 "start_bounty": card['start_bounty']
             }
             
@@ -1572,7 +1550,7 @@ def setup_api_routes(app):
                 status_code=500,
                 content={"success": False, "error": f"Internal error: {str(e)}"}
             )
-    
+
     @app.get("/api/daily-checkin/status/{wallet}")
     async def get_daily_checkin_status(wallet: str, request: Request):
         """Получить статус ежедневного чекина"""
@@ -1742,7 +1720,7 @@ def setup_api_routes(app):
                 cursor.close()
             if conn:
                 conn.close()
-    
+
     @app.post("/api/daily-checkin/checkin/{wallet}")
     async def daily_checkin(wallet: str, request: Request):
         """Выполнить ежедневный чекин"""
@@ -1831,7 +1809,7 @@ def setup_api_routes(app):
                 cursor.close()
             if conn:
                 conn.close()
-    
+
     @app.get("/api/referral/summary/{wallet}")
     async def get_referral_summary(wallet: str, request: Request):
         await _ensure_authorized_user(request, wallet)
@@ -1871,7 +1849,7 @@ def setup_api_routes(app):
                 cursor.close()
             if conn:
                 conn.close()
-    
+
     @app.post("/api/battle/start")
     async def start_battle(request: Request):
         """Начать поиск противника для батла"""
@@ -1900,7 +1878,11 @@ def setup_api_routes(app):
                     )
             else:
                 try:
-                    auth_data = await verify_auth(x_wallet=x_wallet, x_signature=x_signature, x_message=x_message)
+                    auth_data = await verify_auth(
+                        x_wallet=x_wallet,
+                        x_signature=x_signature,
+                        x_message=x_message
+                    )
                 except HTTPException as e:
                     return JSONResponse(
                         status_code=e.status_code,
@@ -1997,7 +1979,7 @@ def setup_api_routes(app):
                 status_code=500,
                 content={"success": False, "error": f"Internal error: {str(e)}"}
             )
-    
+
     @app.post("/api/battle/cancel")
     async def cancel_battle(request: Request):
         """Отменить активный батл"""
@@ -2091,7 +2073,7 @@ def setup_api_routes(app):
                 status_code=500,
                 content={"success": False, "error": f"Internal error: {str(e)}"}
             )
-    
+
     @app.post("/api/battle/finish-search")
     async def finish_battle_search(request: Request):
         """Завершить поиск противника и перейти к выбору карт"""
@@ -2184,7 +2166,7 @@ def setup_api_routes(app):
                 status_code=500,
                 content={"success": False, "error": f"Internal error: {str(e)}"}
             )
-    
+
     @app.post("/api/battle/select-cards")
     async def select_battle_cards(request: Request):
         """Выбрать карты для батла"""
@@ -2192,7 +2174,7 @@ def setup_api_routes(app):
             body = await request.json()
             wallet = body.get("wallet")
             battle_id = body.get("battle_id")
-            cards = body.get("cards", [])  # [{id_card, quantity}, ...]
+            cards = body.get("cards", [])  # [{ id_card, quantity }, ...]
             
             if not wallet or not battle_id or not cards:
                 return JSONResponse(
@@ -2261,11 +2243,16 @@ def setup_api_routes(app):
             
             # Проверяем, что у пользователя есть все выбранные карты
             user_id = battle['id_user']
+            
             total_tickets = 0
             
             for card_data in cards:
                 id_card = card_data.get('id_card')
                 quantity = card_data.get('quantity', 1)
+                try:
+                    quantity = int(quantity)
+                except (TypeError, ValueError):
+                    quantity = 0
                 
                 if not id_card or quantity <= 0:
                     cursor.close()
@@ -2275,24 +2262,32 @@ def setup_api_routes(app):
                         content={"success": False, "error": "Invalid card data"}
                     )
                 
-                # Проверяем наличие карты
+                # Проверяем карту и её редкость
                 cursor.execute("""
-                    SELECT cu.quantity as user_quantity, c.start_bounty
-                    FROM Card_User cu
-                    JOIN Cards c ON cu.id_card = c.id_card
-                    WHERE cu.id_user = %s AND cu.id_card = %s
+                    SELECT c.rarity, c.start_bounty, COALESCE(cu.quantity, 0) as user_quantity
+                    FROM Cards c
+                    LEFT JOIN Card_User cu ON c.id_card = cu.id_card AND cu.id_user = %s
+                    WHERE c.id_card = %s
                 """, (user_id, id_card))
                 card_info = cursor.fetchone()
                 
-                if not card_info or card_info['user_quantity'] < quantity:
+                if not card_info:
+                    cursor.close()
+                    conn.close()
+                    return JSONResponse(
+                        status_code=404,
+                        content={"success": False, "error": f"Card {id_card} not found"}
+                    )
+                
+                if card_info['user_quantity'] < quantity:
                     cursor.close()
                     conn.close()
                     return JSONResponse(
                         status_code=400,
-                        content={"success": False, "error": f"Not enough cards. Card {id_card}: have {card_info['user_quantity'] if card_info else 0}, need {quantity}"}
+                        content={"success": False, "error": f"Not enough cards. You have {card_info['user_quantity']}, need {quantity}"}
                     )
                 
-                total_tickets += card_info['start_bounty'] * quantity
+                total_tickets += int(card_info.get('start_bounty') or 0) * quantity
             
             # Сохраняем выбранные карты
             import json
@@ -2406,7 +2401,7 @@ def setup_api_routes(app):
                 status_code=500,
                 content={"success": False, "error": f"Internal error: {str(e)}"}
             )
-    
+
     @app.post("/api/battle/fight")
     async def fight_battle(request: Request):
         """Провести бой и определить победителя"""
@@ -2510,6 +2505,7 @@ def setup_api_routes(app):
                     WHERE id_card = %s
                 """, (card_data['id_card'],))
                 card_info = cursor.fetchone()
+                
                 if card_info:
                     user_cards_full.append({
                         'id_card': card_info['id_card'],
@@ -2529,6 +2525,7 @@ def setup_api_routes(app):
                     WHERE id_card = %s
                 """, (card_data['id_card'],))
                 card_info = cursor.fetchone()
+                
                 if card_info:
                     opponent_cards_full.append({
                         'id_card': card_info['id_card'],
@@ -2591,7 +2588,7 @@ def setup_api_routes(app):
                 status_code=500,
                 content={"success": False, "error": f"Internal error: {str(e)}"}
             )
-    
+
     @app.get("/api/battle/status/{battle_id}")
     async def get_battle_status(battle_id: int, request: Request):
         """Получить статус батла"""
@@ -2609,8 +2606,8 @@ def setup_api_routes(app):
                         from core.sessions import verify_session_cookie
                         auth_data = await verify_session_cookie(request)
                         wallet = auth_data["wallet"]
-                    except Exception:
-                        pass
+                    except:
+                        pass  # Пользователь не авторизован, показываем все пари
             else:
                 try:
                     auth_data = await verify_auth(x_wallet=x_wallet, x_signature=x_signature, x_message=x_message)
@@ -2675,14 +2672,14 @@ def setup_api_routes(app):
                 status_code=500,
                 content={"success": False, "error": f"Internal error: {str(e)}"}
             )
-    
+
     # ==================== PREDICTIONS API ====================
     
     @app.get("/api/predictions/markets")
     async def get_predictions_markets(
         request: Request,
         period: str = "24h",
-        limit: int = 20,
+        limit: int = 10,
         force_refresh: bool = False
     ):
         """Получить список активных пари (исключает пари, на которые пользователь уже сделал ставку)"""
@@ -2716,7 +2713,7 @@ def setup_api_routes(app):
                                 pass  # Пользователь не авторизован, показываем все пари
             
             # Если force_refresh, можно запустить синхронизацию (но это долго, лучше не делать)
-            # Просто получаем из БД
+            # По умолчанию получаем из БД
             
             # Определяем сортировку по периоду
             order_by = "volume_24h DESC"
@@ -2725,72 +2722,103 @@ def setup_api_routes(app):
             elif period == "30d":
                 order_by = "volume_30d DESC"
             
-            criteria_prob_diff_max = float(os.getenv("PREDICTIONS_PROB_DIFF_MAX", "30"))
-            criteria_days_min = float(os.getenv("PREDICTIONS_DAYS_MIN", "14"))
-            criteria_days_max = float(os.getenv("PREDICTIONS_DAYS_MAX", "21"))
-
             # Если пользователь авторизован, исключаем пари, на которые он уже сделал ставку
-            if user_id:
-                cursor.execute(f"""
-                    SELECT 
-                        p.id_prediction,
-                        p.polymarket_id,
-                        p.title,
-                        p.description,
-                        p.category,
-                        p.outcome_a,
-                        p.outcome_b,
-                        p.outcome_a_probability,
-                        p.outcome_b_probability,
-                        p.resolution_date,
-                        p.status,
-                        p.volume_24h,
-                        p.volume_7d,
-                        p.volume_30d,
-                        p.created_at,
-                        p.updated_at
-                    FROM public.predictions p
-                    LEFT JOIN public.user_bets ub ON p.id_prediction = ub.id_prediction AND ub.id_user = %s
-                    WHERE p.status = 'active'
-                      AND ub.id_bet IS NULL
-                      AND p.resolution_date IS NOT NULL
-                      AND p.resolution_date > (now() + (%s * interval '1 day'))
-                      AND p.resolution_date < (now() + (%s * interval '1 day'))
-                      AND ABS(COALESCE(p.outcome_a_probability, 50) - COALESCE(p.outcome_b_probability, 50)) <= %s
-                    ORDER BY {order_by}
-                    LIMIT %s
-                """, (user_id, criteria_days_min, criteria_days_max, criteria_prob_diff_max, limit))
-            else:
-                # Если пользователь не авторизован, показываем все активные пари
-                cursor.execute(f"""
-                    SELECT 
-                        id_prediction,
-                        polymarket_id,
-                        title,
-                        description,
-                        category,
-                        outcome_a,
-                        outcome_b,
-                        outcome_a_probability,
-                        outcome_b_probability,
-                        resolution_date,
-                        status,
-                        volume_24h,
-                        volume_7d,
-                        volume_30d,
-                        created_at,
-                        updated_at
-                    FROM public.predictions
-                    WHERE status = 'active'
-                      AND resolution_date IS NOT NULL
-                      AND resolution_date > (now() + (%s * interval '1 day'))
-                      AND resolution_date < (now() + (%s * interval '1 day'))
-                      AND ABS(COALESCE(outcome_a_probability, 50) - COALESCE(outcome_b_probability, 50)) <= %s
-                    ORDER BY {order_by}
-                    LIMIT %s
-                """, (criteria_days_min, criteria_days_max, criteria_prob_diff_max, limit))
-            
-            markets = cursor.fetchall()
+            def _fetch_markets():
+                if user_id:
+                    cursor.execute(f"""
+                        SELECT 
+                            p.id_prediction,
+                            p.polymarket_id,
+                            p.title,
+                            p.description,
+                            p.category,
+                            p.outcome_a,
+                            p.outcome_b,
+                            p.outcome_a_probability,
+                            p.outcome_b_probability,
+                            p.outcome_a_odds,
+                            p.outcome_b_odds,
+                            p.resolution_date,
+                            p.status,
+                            p.volume_24h,
+                            p.volume_7d,
+                            p.volume_30d,
+                            p.created_at,
+                            p.updated_at
+                        FROM public.predictions p
+                        LEFT JOIN public.user_bets ub ON p.id_prediction = ub.id_prediction AND ub.id_user = %s
+                        WHERE p.status = 'active'
+                          AND ub.id_bet IS NULL
+                        ORDER BY {order_by}
+                        LIMIT %s
+                    """, (user_id, limit))
+                else:
+                    # Если пользователь не авторизован, показываем все активные пари
+                    cursor.execute(f"""
+                        SELECT 
+                            id_prediction,
+                            polymarket_id,
+                            title,
+                            description,
+                            category,
+                            outcome_a,
+                            outcome_b,
+                            outcome_a_probability,
+                            outcome_b_probability,
+                            outcome_a_odds,
+                            outcome_b_odds,
+                            resolution_date,
+                            status,
+                            volume_24h,
+                            volume_7d,
+                            volume_30d,
+                            created_at,
+                            updated_at
+                        FROM public.predictions
+                        WHERE status = 'active'
+                        ORDER BY {order_by}
+                        LIMIT %s
+                    """, (limit,))
+                return cursor.fetchall()
+
+            markets = _fetch_markets()
+
+            if force_refresh and not markets:
+                try:
+                    cursor.close()
+                    conn.close()
+                except Exception:
+                    pass
+
+                try:
+                    import asyncio
+                    import os
+                    from services.polymarket_sync import sync_polymarket_top_popular_markets
+
+                    target = int(os.getenv("PREDICTIONS_SYNC_TARGET", str(limit or 10)))
+                    if target <= 0:
+                        target = int(limit or 10)
+                    if target <= 0:
+                        target = 10
+
+                    await asyncio.to_thread(sync_polymarket_top_popular_markets, target)
+                except Exception as e:
+                    print(f"Predictions force_refresh sync error: {e}")
+
+                conn = get_db_connection()
+                cursor = conn.cursor(cursor_factory=RealDictCursor)
+                markets = _fetch_markets()
+
+                if force_refresh and not markets:
+                    cursor.close()
+                    conn.close()
+                    return {
+                        "success": False,
+                        "error": "No predictions found. Sync did not return/save any markets.",
+                        "markets": [],
+                        "count": 0
+                    }
+
             cursor.close()
             conn.close()
             
@@ -2806,8 +2834,10 @@ def setup_api_routes(app):
                     "category": market.get('category', 'general'),
                     "outcome_a": market['outcome_a'],
                     "outcome_b": market['outcome_b'],
-                    "outcome_a_probability": float(market['outcome_a_probability']) if market['outcome_a_probability'] else 50.0,
-                    "outcome_b_probability": float(market['outcome_b_probability']) if market['outcome_b_probability'] else 50.0,
+                    "outcome_a_probability": float(market['outcome_a_probability']) if market['outcome_a_probability'] else None,
+                    "outcome_b_probability": float(market['outcome_b_probability']) if market['outcome_b_probability'] else None,
+                    "outcome_a_odds": float(market['outcome_a_odds']) if market.get('outcome_a_odds') is not None else None,
+                    "outcome_b_odds": float(market['outcome_b_odds']) if market.get('outcome_b_odds') is not None else None,
                     "resolution_date": ends_at,
                     "ends_at": ends_at,
                     "status": market['status'],
@@ -2830,10 +2860,12 @@ def setup_api_routes(app):
                 status_code=500,
                 content={"success": False, "error": f"Internal error: {str(e)}"}
             )
-    
+
     @app.post("/api/predictions/bet/{wallet}")
     async def create_prediction_bet(wallet: str, request: Request):
         """Создать ставку на пари"""
+        conn = None
+        cursor = None
         try:
             # Проверяем авторизацию
             await _ensure_authorized_user(request, wallet)
@@ -2842,12 +2874,49 @@ def setup_api_routes(app):
             body = await request.json()
             prediction_id = body.get("prediction_id")
             chosen_outcome = body.get("chosen_outcome")
+            card_instance_id = body.get("card_instance_id")
+            card_id = body.get("card_id")
+            card_quantity = body.get("card_quantity")
             
             if not prediction_id or not chosen_outcome:
                 return JSONResponse(
                     status_code=400,
                     content={"success": False, "error": "Missing prediction_id or chosen_outcome"}
                 )
+
+            if card_instance_id is None and (card_id is None or card_quantity is None):
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "error": "Missing card_instance_id (or card_id and card_quantity)"}
+                )
+
+            try:
+                card_instance_id = int(card_instance_id) if card_instance_id is not None else None
+                card_id = int(card_id) if card_id is not None else None
+                card_quantity = int(card_quantity) if card_quantity is not None else 1
+            except (ValueError, TypeError):
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "error": "Invalid card_instance_id/card_id/card_quantity"}
+                )
+
+            if card_instance_id is not None and card_instance_id <= 0:
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "error": "card_instance_id must be a positive integer"}
+                )
+
+            if card_instance_id is None:
+                if card_id is None or card_id <= 0:
+                    return JSONResponse(
+                        status_code=400,
+                        content={"success": False, "error": "card_id must be a positive integer"}
+                    )
+                if card_quantity != 1:
+                    return JSONResponse(
+                        status_code=400,
+                        content={"success": False, "error": "Only 1 card can be staked"}
+                    )
             
             if chosen_outcome not in ['A', 'B']:
                 return JSONResponse(
@@ -2857,81 +2926,57 @@ def setup_api_routes(app):
             
             conn = get_db_connection()
             cursor = conn.cursor(cursor_factory=RealDictCursor)
+
+            def _error(status_code: int, message: str):
+                if conn:
+                    conn.rollback()
+                return JSONResponse(
+                    status_code=status_code,
+                    content={"success": False, "error": message}
+                )
             
             # Получаем пользователя
             cursor.execute("SELECT id_user FROM Users WHERE wallet = %s", (wallet,))
             user = cursor.fetchone()
             if not user:
-                cursor.close()
-                conn.close()
-                return JSONResponse(
-                    status_code=404,
-                    content={"success": False, "error": "User not found"}
-                )
+                return _error(404, "User not found")
+            
             user_id = user['id_user']
             
-            criteria_prob_diff_max = float(os.getenv("PREDICTIONS_PROB_DIFF_MAX", "30"))
-            criteria_days_min = float(os.getenv("PREDICTIONS_DAYS_MIN", "14"))
-            criteria_days_max = float(os.getenv("PREDICTIONS_DAYS_MAX", "21"))
-
             # Проверяем, что пари существует и активно
             cursor.execute("""
-                SELECT id_prediction, status, outcome_a_probability, outcome_b_probability, resolution_date
+                SELECT id_prediction, status,
+                       outcome_a_probability, outcome_b_probability,
+                       outcome_a_odds, outcome_b_odds,
+                       resolution_date
                 FROM public.predictions 
                 WHERE id_prediction = %s
+                FOR UPDATE
             """, (prediction_id,))
             prediction = cursor.fetchone()
             
             if not prediction:
-                cursor.close()
-                conn.close()
-                return JSONResponse(
-                    status_code=404,
-                    content={"success": False, "error": "Prediction not found"}
-                )
+                return _error(404, "Prediction not found")
             
             if prediction['status'] != 'active':
-                cursor.close()
-                conn.close()
-                return JSONResponse(
-                    status_code=400,
-                    content={"success": False, "error": "Prediction is not active"}
-                )
+                return _error(400, "Prediction is not active")
 
             from datetime import datetime, timezone
             ends_at = prediction.get('resolution_date')
             if not ends_at:
-                cursor.close()
-                conn.close()
-                return JSONResponse(
-                    status_code=400,
-                    content={"success": False, "error": "Prediction does not meet criteria"}
-                )
+                return _error(400, "Prediction is missing resolution_date")
 
             if isinstance(ends_at, str):
                 try:
                     ends_at = datetime.fromisoformat(ends_at.replace('Z', '+00:00'))
                 except Exception:
-                    cursor.close()
-                    conn.close()
-                    return JSONResponse(
-                        status_code=400,
-                        content={"success": False, "error": "Prediction does not meet criteria"}
-                    )
+                    return _error(400, "Invalid resolution_date")
 
             now = datetime.now(timezone.utc)
             if ends_at.tzinfo is None:
                 ends_at = ends_at.replace(tzinfo=timezone.utc)
-            days_until = (ends_at - now).total_seconds() / (24 * 3600)
-            prob_a = float(prediction.get('outcome_a_probability') or 50.0)
-            prob_b = float(prediction.get('outcome_b_probability') or 50.0)
-            if abs(prob_a - prob_b) > criteria_prob_diff_max or days_until < criteria_days_min or days_until > criteria_days_max:
-                cursor.close()
-                conn.close()
-                return JSONResponse(
-                    status_code=400,
-                    content={"success": False, "error": "Prediction does not meet criteria"}
-                )
+            if ends_at <= now:
+                return _error(400, "Prediction already ended")
             
             # Проверяем, нет ли уже ставки от этого пользователя
             cursor.execute("""
@@ -2941,44 +2986,174 @@ def setup_api_routes(app):
             existing_bet = cursor.fetchone()
             
             if existing_bet:
-                cursor.close()
-                conn.close()
-                return JSONResponse(
-                    status_code=400,
-                    content={"success": False, "error": "Bet already exists for this prediction"}
-                )
+                return _error(400, "Bet already exists for this prediction")
+
+            chosen_odds = None
+            if chosen_outcome == 'A':
+                chosen_odds = prediction.get('outcome_a_odds')
+            elif chosen_outcome == 'B':
+                chosen_odds = prediction.get('outcome_b_odds')
+            try:
+                odds_at_bet = float(chosen_odds) if chosen_odds is not None else 1.0
+            except Exception:
+                odds_at_bet = 1.0
+            if not math.isfinite(odds_at_bet) or odds_at_bet <= 0:
+                odds_at_bet = 1.0
+
+            if card_instance_id is None:
+                cursor.execute("""
+                    SELECT cu.quantity as user_quantity, c.start_bounty
+                    FROM public.card_user cu
+                    JOIN public.cards c ON cu.id_card = c.id_card
+                    WHERE cu.id_user = %s AND cu.id_card = %s
+                    FOR UPDATE
+                """, (user_id, card_id))
+                card_row = cursor.fetchone()
+                if not card_row or int(card_row.get('user_quantity') or 0) < 1:
+                    return _error(400, "Not enough cards")
+
+                start_bounty = int(card_row.get('start_bounty') or 0)
+                if start_bounty <= 0:
+                    return _error(400, "Invalid card bounty")
+
+                cursor.execute("""
+                    WITH inst AS (
+                        SELECT
+                            COUNT(*) FILTER (WHERE status IN ('available','staked'))::int AS total_cnt,
+                            COUNT(*) FILTER (WHERE status = 'staked')::int AS staked_cnt
+                        FROM public.card_user_instances
+                        WHERE id_user = %s AND id_card = %s
+                    ),
+                    need AS (
+                        SELECT GREATEST((%s + inst.staked_cnt) - inst.total_cnt, 0)::int AS missing
+                        FROM inst
+                    )
+                    INSERT INTO public.card_user_instances (id_user, id_card, bounty, status)
+                    SELECT %s, %s, %s, 'available'
+                    FROM need, generate_series(1, need.missing)
+                """, (user_id, card_id, int(card_row.get('user_quantity') or 0), user_id, card_id, start_bounty))
+
+                cursor.execute("""
+                    SELECT id_instance, bounty
+                    FROM public.card_user_instances
+                    WHERE id_user = %s AND id_card = %s AND status = 'available'
+                    ORDER BY id_instance
+                    LIMIT 1
+                    FOR UPDATE
+                """, (user_id, card_id))
+                inst_row = cursor.fetchone()
+                if not inst_row:
+                    return _error(400, "Not enough cards")
+
+                card_instance_id = int(inst_row['id_instance'])
+                bet_bounty = int(inst_row.get('bounty') or start_bounty)
+            else:
+                cursor.execute("""
+                    SELECT i.id_instance, i.id_card, i.bounty, i.status
+                    FROM public.card_user_instances i
+                    WHERE i.id_instance = %s AND i.id_user = %s
+                    FOR UPDATE
+                """, (card_instance_id, user_id))
+                inst_row = cursor.fetchone()
+                if not inst_row:
+                    return _error(400, "Card instance not found")
+                if str(inst_row.get('status') or '') != 'available':
+                    return _error(400, f"Card instance not available (status: {inst_row.get('status')})")
+                card_id = int(inst_row['id_card'])
+                bet_bounty = int(inst_row.get('bounty') or 0)
+                if bet_bounty <= 0:
+                    return _error(400, "Invalid card bounty")
+
+                cursor.execute("""
+                    SELECT cu.quantity as user_quantity
+                    FROM public.card_user cu
+                    WHERE cu.id_user = %s AND cu.id_card = %s
+                    FOR UPDATE
+                """, (user_id, card_id))
+                card_row = cursor.fetchone()
+                if not card_row or int(card_row.get('user_quantity') or 0) < 1:
+                    return _error(400, "Not enough cards")
+
+            cursor.execute("""
+                UPDATE public.card_user_instances
+                SET status = 'staked', updated_at = now()
+                WHERE id_instance = %s AND id_user = %s AND status = 'available'
+            """, (card_instance_id, user_id))
+            if cursor.rowcount == 0:
+                cursor.execute("""
+                    SELECT status
+                    FROM public.card_user_instances
+                    WHERE id_instance = %s AND id_user = %s
+                """, (card_instance_id, user_id))
+                cur = cursor.fetchone()
+                if cur and cur.get('status') is not None:
+                    return _error(400, f"Card instance not available (status: {cur.get('status')})")
+                return _error(400, "Card instance not available")
+
+            cursor.execute("""
+                UPDATE public.card_user
+                SET quantity = quantity - 1
+                WHERE id_user = %s AND id_card = %s AND quantity >= 1
+            """, (user_id, card_id))
+            if cursor.rowcount == 0:
+                return _error(400, "Not enough cards")
+
+            cursor.execute("""
+                DELETE FROM public.card_user
+                WHERE id_user = %s AND id_card = %s AND quantity <= 0
+            """, (user_id, card_id))
+
+            bet_tickets = int(bet_bounty)
             
             # Создаем ставку
             cursor.execute("""
-                INSERT INTO public.user_bets (id_user, id_prediction, chosen_outcome, status)
-                VALUES (%s, %s, %s, %s)
+                INSERT INTO public.user_bets (
+                    id_user, id_prediction, chosen_outcome, status,
+                    bet_amount, bet_card_id, bet_card_quantity, bet_tickets,
+                    bet_card_instance_id, bet_bounty, odds_at_bet
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id_bet
-            """, (user_id, prediction_id, chosen_outcome, 'pending'))
+            """, (user_id, prediction_id, chosen_outcome, 'pending', bet_tickets, card_id, 1, bet_tickets, card_instance_id, bet_bounty, odds_at_bet))
             
             bet = cursor.fetchone()
             bet_id = bet['id_bet']
             
             conn.commit()
-            cursor.close()
-            conn.close()
             
             return {
                 "success": True,
                 "bet_id": bet_id,
+                "bet_tickets": bet_tickets,
                 "message": "Bet placed successfully"
             }
             
         except HTTPException:
+            if conn:
+                conn.rollback()
             raise
         except Exception as e:
             print(f"Create prediction bet error: {e}")
             import traceback
             traceback.print_exc()
+            if conn:
+                conn.rollback()
             return JSONResponse(
                 status_code=500,
                 content={"success": False, "error": f"Internal error: {str(e)}"}
             )
-    
+        finally:
+            try:
+                if cursor:
+                    cursor.close()
+            except Exception:
+                pass
+            try:
+                if conn:
+                    conn.close()
+            except Exception:
+                pass
+
     @app.get("/api/predictions/user/{wallet}")
     async def get_user_predictions_bets(wallet: str, request: Request):
         """Получить ставки пользователя"""
@@ -2999,6 +3174,7 @@ def setup_api_routes(app):
                     status_code=404,
                     content={"success": False, "error": "User not found"}
                 )
+            
             user_id = user['id_user']
             
             # Получаем ставки пользователя
@@ -3008,11 +3184,14 @@ def setup_api_routes(app):
                     ub.id_prediction,
                     ub.chosen_outcome,
                     ub.status,
-                    ub.reward_issued,
-                    ub.reward_claimed,
-                    ub.reward_claimed_at,
-                    ub.reward_type,
-                    ub.reward_data,
+                    ub.bet_card_id,
+                    ub.bet_card_quantity,
+                    ub.bet_card_instance_id,
+                    ub.bet_bounty,
+                    ub.odds_at_bet,
+                    ub.minted_card_instance_id,
+                    ub.bet_tickets,
+                    ub.payout_tickets,
                     ub.created_at,
                     ub.resolved_at,
                     p.title,
@@ -3046,11 +3225,14 @@ def setup_api_routes(app):
                     "outcome_a_probability": float(bet['outcome_a_probability']) if bet['outcome_a_probability'] else 50.0,
                     "outcome_b_probability": float(bet['outcome_b_probability']) if bet['outcome_b_probability'] else 50.0,
                     "status": bet['status'],
-                    "reward_issued": bool(bet.get('reward_issued')),
-                    "reward_claimed": bool(bet.get('reward_claimed')),
-                    "reward_claimed_at": str(bet['reward_claimed_at']) if bet.get('reward_claimed_at') else None,
-                    "reward_type": bet.get('reward_type'),
-                    "reward_data": bet.get('reward_data'),
+                    "bet_card_id": bet.get('bet_card_id'),
+                    "bet_card_quantity": int(bet.get('bet_card_quantity') or 0),
+                    "bet_card_instance_id": bet.get('bet_card_instance_id'),
+                    "bet_bounty": int(bet.get('bet_bounty') or 0) if bet.get('bet_bounty') is not None else None,
+                    "odds_at_bet": float(bet.get('odds_at_bet')) if bet.get('odds_at_bet') is not None else None,
+                    "minted_card_instance_id": bet.get('minted_card_instance_id'),
+                    "bet_tickets": int(bet.get('bet_tickets') or 0),
+                    "payout_tickets": int(bet.get('payout_tickets') or 0) if bet.get('payout_tickets') is not None else None,
                     "prediction_status": bet['prediction_status'],
                     "winner_outcome": bet['winner_outcome'],
                     "ends_at": ends_at,
@@ -3074,7 +3256,7 @@ def setup_api_routes(app):
                 status_code=500,
                 content={"success": False, "error": f"Internal error: {str(e)}"}
             )
-    
+
     @app.post("/api/predictions/resolve/{prediction_id}")
     async def resolve_prediction(prediction_id: int, request: Request):
         """Разрешить пари (установить победителя)"""
@@ -3127,8 +3309,10 @@ def setup_api_routes(app):
             
             # Проверяем, что пари существует
             cursor.execute("""
-                SELECT id_prediction, status FROM public.predictions 
+                SELECT id_prediction, status, outcome_a_odds, outcome_b_odds
+                FROM public.predictions 
                 WHERE id_prediction = %s
+                FOR UPDATE
             """, (prediction_id,))
             prediction = cursor.fetchone()
             
@@ -3139,6 +3323,14 @@ def setup_api_routes(app):
                     status_code=404,
                     content={"success": False, "error": "Prediction not found"}
                 )
+
+            if prediction.get('status') in ('resolved', 'cancelled'):
+                cursor.close()
+                conn.close()
+                return {
+                    "success": True,
+                    "message": "Prediction already resolved"
+                }
             
             # Обновляем пари
             cursor.execute("""
@@ -3149,11 +3341,33 @@ def setup_api_routes(app):
                 WHERE id_prediction = %s
             """, (winner_outcome, prediction_id))
             
-            # Инициализируем список наград (для случая cancelled будет пустым)
-            rewards_summary = []
-            
             # Обновляем статусы ставок
             if winner_outcome == 'cancelled':
+                cursor.execute("""
+                    SELECT id_user, bet_card_id, bet_card_quantity, bet_card_instance_id
+                    FROM public.user_bets
+                    WHERE id_prediction = %s AND status = 'pending'
+                """, (prediction_id,))
+                pending_bets = cursor.fetchall()
+                for b in pending_bets:
+                    bet_card_id = b.get('bet_card_id')
+                    bet_card_quantity = int(b.get('bet_card_quantity') or 0)
+                    bet_card_instance_id = b.get('bet_card_instance_id')
+
+                    if bet_card_instance_id:
+                        cursor.execute("""
+                            UPDATE public.card_user_instances
+                            SET status = 'available', updated_at = now()
+                            WHERE id_instance = %s AND id_user = %s AND status = 'staked'
+                        """, (bet_card_instance_id, b['id_user']))
+
+                    if bet_card_id and bet_card_quantity > 0:
+                        cursor.execute("""
+                            INSERT INTO public.card_user (id_user, id_card, quantity)
+                            VALUES (%s, %s, %s)
+                            ON CONFLICT (id_user, id_card) DO UPDATE SET quantity = public.card_user.quantity + EXCLUDED.quantity
+                        """, (b['id_user'], bet_card_id, bet_card_quantity))
+
                 cursor.execute("""
                     UPDATE public.user_bets 
                     SET status = 'cancelled',
@@ -3161,56 +3375,115 @@ def setup_api_routes(app):
                     WHERE id_prediction = %s AND status = 'pending'
                 """, (prediction_id,))
             else:
-                # Получаем список выигравших пользователей
                 cursor.execute("""
-                    SELECT id_user FROM public.user_bets 
-                    WHERE id_prediction = %s 
-                    AND chosen_outcome = %s 
-                    AND status = 'pending'
+                    SELECT id_bet, id_user, bet_tickets, bet_card_id, bet_card_quantity,
+                           bet_card_instance_id, bet_bounty, odds_at_bet
+                    FROM public.user_bets
+                    WHERE id_prediction = %s
+                      AND chosen_outcome = %s
+                      AND status = 'pending'
+                    FOR UPDATE
                 """, (prediction_id, winner_outcome))
-                winning_users = cursor.fetchall()
-                
-                # Выдаем награды выигравшим пользователям
-                for user_row in winning_users:
-                    user_id = user_row['id_user']
+                winning_bets = cursor.fetchall()
+                for b in winning_bets:
+                    bet_card_id = b.get('bet_card_id')
+                    bet_card_instance_id = b.get('bet_card_instance_id')
+                    return_qty = int(b.get('bet_card_quantity') or 1)
+                    bet_bounty = int(b.get('bet_bounty') or 0)
+                    bet_tickets = int(b.get('bet_tickets') or bet_bounty or 0)
+
                     try:
-                        rewards_issued, reward_type, reward_data = issue_prediction_reward(cursor, conn, user_id)
-                        if rewards_issued:
-                            rewards_summary.append({
-                                "user_id": user_id,
-                                "rewards": rewards_issued
-                            })
-                            cursor.execute("""
-                                UPDATE public.user_bets
-                                SET reward_type = %s,
-                                    reward_data = %s
-                                WHERE id_prediction = %s
-                                AND id_user = %s
-                                AND chosen_outcome = %s
-                                AND status = 'pending'
-                            """, (
-                                reward_type,
-                                json.dumps(reward_data) if reward_data else None,
-                                prediction_id,
-                                user_id,
-                                winner_outcome
-                            ))
-                    except Exception as e:
-                        print(f"Error issuing reward to user {user_id}: {e}")
-                        # Продолжаем обработку других пользователей
-                
+                        odds_at_bet = float(b.get('odds_at_bet')) if b.get('odds_at_bet') is not None else None
+                    except Exception:
+                        odds_at_bet = None
+                    if odds_at_bet is None:
+                        base_odds = prediction.get('outcome_a_odds') if winner_outcome == 'A' else prediction.get('outcome_b_odds')
+                        try:
+                            odds_at_bet = float(base_odds) if base_odds is not None else 1.0
+                        except Exception:
+                            odds_at_bet = 1.0
+                    if not math.isfinite(odds_at_bet) or odds_at_bet <= 0:
+                        odds_at_bet = 1.0
+
+                    payout_tickets = int(math.ceil(bet_tickets * odds_at_bet))
+
+                    if bet_card_instance_id:
+                        cursor.execute("""
+                            UPDATE public.card_user_instances
+                            SET status = 'available', updated_at = now()
+                            WHERE id_instance = %s AND id_user = %s AND status = 'staked'
+                        """, (bet_card_instance_id, b['id_user']))
+
+                    if bet_card_id:
+                        cursor.execute("""
+                            INSERT INTO public.card_user (id_user, id_card, quantity)
+                            VALUES (%s, %s, %s)
+                            ON CONFLICT (id_user, id_card) DO UPDATE SET quantity = public.card_user.quantity + EXCLUDED.quantity
+                        """, (b['id_user'], bet_card_id, return_qty))
+
+                        minted_bounty = int(math.ceil(bet_tickets * odds_at_bet))
+                        payout_tickets = minted_bounty
+                        cursor.execute("""
+                            INSERT INTO public.card_user_instances (id_user, id_card, bounty, status)
+                            VALUES (%s, %s, %s, 'available')
+                            RETURNING id_instance
+                        """, (b['id_user'], bet_card_id, minted_bounty))
+                        minted_row = cursor.fetchone()
+                        minted_instance_id = minted_row['id_instance'] if minted_row else None
+
+                        cursor.execute("""
+                            INSERT INTO public.card_user (id_user, id_card, quantity)
+                            VALUES (%s, %s, 1)
+                            ON CONFLICT (id_user, id_card) DO UPDATE SET quantity = public.card_user.quantity + EXCLUDED.quantity
+                        """, (b['id_user'], bet_card_id))
+
+                        cursor.execute("""
+                            UPDATE public.user_bets
+                            SET payout_tickets = %s,
+                                minted_card_instance_id = %s
+                            WHERE id_bet = %s
+                        """, (minted_bounty, minted_instance_id, b['id_bet']))
+                    else:
+                        cursor.execute("""
+                            UPDATE public.users
+                            SET tickets_bonus = tickets_bonus + %s
+                            WHERE id_user = %s
+                        """, (payout_tickets, b['id_user']))
+                        cursor.execute("""
+                            UPDATE public.user_bets
+                            SET payout_tickets = %s
+                            WHERE id_bet = %s
+                        """, (payout_tickets, b['id_bet']))
+
                 # Помечаем выигравшие ставки
                 cursor.execute("""
                     UPDATE public.user_bets 
                     SET status = 'won',
-                        resolved_at = now(),
-                        reward_issued = TRUE
+                        resolved_at = now()
                     WHERE id_prediction = %s 
                     AND chosen_outcome = %s 
                     AND status = 'pending'
                 """, (prediction_id, winner_outcome))
                 
                 # Помечаем проигравшие ставки
+                cursor.execute("""
+                    SELECT id_bet, id_user, bet_card_instance_id
+                    FROM public.user_bets
+                    WHERE id_prediction = %s
+                      AND chosen_outcome != %s
+                      AND status = 'pending'
+                    FOR UPDATE
+                """, (prediction_id, winner_outcome))
+                losing_bets = cursor.fetchall()
+                for b in losing_bets:
+                    bet_card_instance_id = b.get('bet_card_instance_id')
+                    if bet_card_instance_id:
+                        cursor.execute("""
+                            UPDATE public.card_user_instances
+                            SET status = 'burned', updated_at = now()
+                            WHERE id_instance = %s AND id_user = %s AND status = 'staked'
+                        """, (bet_card_instance_id, b['id_user']))
+
                 cursor.execute("""
                     UPDATE public.user_bets 
                     SET status = 'lost',
@@ -3226,9 +3499,7 @@ def setup_api_routes(app):
             
             return {
                 "success": True,
-                "message": "Prediction resolved successfully",
-                "rewards_issued": len(rewards_summary) > 0,
-                "rewards_count": len(rewards_summary)
+                "message": "Prediction resolved successfully"
             }
             
         except HTTPException:

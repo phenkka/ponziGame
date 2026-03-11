@@ -39,14 +39,16 @@ from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
 import requests
 import hashlib
+import json
 from datetime import datetime, timezone
 from dateutil import parser as date_parser
 import time
+from typing import Optional
 
 load_dotenv()
 
 # Polymarket API URL
-POLYMARKET_API_URL = "https://gamma-api.polymarket.com"
+POLYMARKET_API_URL = os.getenv("POLYMARKET_API_URL", "https://gamma-api.polymarket.com")
 
 def get_db_connection():
     """
@@ -134,27 +136,228 @@ def parse_resolution_date(date_str):
     """
     if not date_str:
         return None
-    
+
     try:
-        # Если это timestamp (число)
         if isinstance(date_str, (int, float)):
             return datetime.fromtimestamp(date_str, tz=timezone.utc)
-        
-        # Если это строка с timestamp
+
         if isinstance(date_str, str) and date_str.isdigit():
             return datetime.fromtimestamp(int(date_str), tz=timezone.utc)
-        
-        # Пробуем распарсить как ISO 8601 или другой формат
+
         parsed_date = date_parser.parse(date_str)
-        
-        # Если дата без timezone, добавляем UTC
+
         if parsed_date.tzinfo is None:
             parsed_date = parsed_date.replace(tzinfo=timezone.utc)
-        
+
         return parsed_date
     except Exception as e:
         print(f"Warning: Could not parse date '{date_str}': {e}")
         return None
+
+
+def _safe_float(value, default: float = 0.0) -> float:
+    try:
+        if value is None:
+            return default
+        return float(value)
+    except (ValueError, TypeError):
+        return default
+
+
+def _probability_to_decimal_odds(probability_percent: float) -> Optional[float]:
+    try:
+        if probability_percent <= 0:
+            return None
+        return 100.0 / float(probability_percent)
+    except (ValueError, TypeError, ZeroDivisionError):
+        return None
+
+
+def fetch_polymarket_top_popular_markets(target_count: int = 10, max_fetch: int = 3000) -> list:
+    try:
+        headers = {
+            "Accept": "application/json",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        }
+
+        url = f"{POLYMARKET_API_URL}/markets"
+        all_markets_data = []
+        max_requests = (min(max_fetch, 3000) + 499) // 500
+
+        for request_num in range(max_requests):
+            params = {
+                "closed": False,
+                "limit": 500,
+                "offset": request_num * 500
+            }
+
+            response = requests.get(url, params=params, headers=headers, timeout=30)
+            if response.status_code != 200:
+                print(f"ERROR: Polymarket API returned status {response.status_code}")
+                try:
+                    print(f"Response: {response.text[:500]}")
+                except Exception:
+                    pass
+                return []
+
+            data = response.json()
+            if isinstance(data, dict):
+                if 'data' in data:
+                    data = data['data']
+                elif 'results' in data:
+                    data = data['results']
+                elif 'markets' in data:
+                    data = data['markets']
+                else:
+                    for _, value in data.items():
+                        if isinstance(value, list) and len(value) > 0:
+                            data = value
+                            break
+
+            if not data or not isinstance(data, list):
+                break
+
+            all_markets_data.extend(data)
+            if len(data) < 500:
+                break
+
+            time.sleep(0.2)
+
+        now = datetime.now(timezone.utc)
+        skipped = {
+            "closed": 0,
+            "not_2_outcomes": 0,
+            "no_prices": 0,
+            "bad_prices": 0,
+            "no_date": 0,
+            "past_date": 0,
+        }
+        mapped = []
+        for market in all_markets_data:
+            if market.get('closed', False) or market.get('status') == 'closed':
+                skipped["closed"] += 1
+                continue
+
+            outcomes = market.get('outcomes') or market.get('outcome') or market.get('tokens') or []
+            if isinstance(outcomes, str) and outcomes.strip():
+                try:
+                    outcomes = json.loads(outcomes)
+                except Exception:
+                    outcomes = []
+            if isinstance(outcomes, dict):
+                outcomes = list(outcomes.values()) if outcomes else []
+            if outcomes and isinstance(outcomes, list) and all(isinstance(o, str) for o in outcomes):
+                outcomes = [{"title": o} for o in outcomes]
+            if not outcomes or len(outcomes) < 2:
+                skipped["not_2_outcomes"] += 1
+                continue
+
+            outcome_a_obj = outcomes[0] if isinstance(outcomes[0], dict) else {}
+            outcome_b_obj = outcomes[1] if isinstance(outcomes[1], dict) else {}
+
+            outcome_prices_raw = market.get('outcomePrices')
+            outcome_prices = None
+            if isinstance(outcome_prices_raw, str) and outcome_prices_raw.strip():
+                try:
+                    parsed = json.loads(outcome_prices_raw)
+                    outcome_prices = parsed
+                except Exception:
+                    outcome_prices = None
+            elif isinstance(outcome_prices_raw, (list, tuple)):
+                outcome_prices = list(outcome_prices_raw)
+            elif isinstance(outcome_prices_raw, dict):
+                outcome_prices = list(outcome_prices_raw.values())
+
+            price_a = None
+            price_b = None
+            if outcome_prices and isinstance(outcome_prices, list) and len(outcome_prices) >= 2:
+                price_a = outcome_prices[0]
+                price_b = outcome_prices[1]
+            elif 'price' in outcome_a_obj and 'price' in outcome_b_obj:
+                price_a = outcome_a_obj.get('price')
+                price_b = outcome_b_obj.get('price')
+
+            price_a_f = _safe_float(price_a, default=0.0)
+            price_b_f = _safe_float(price_b, default=0.0)
+            if price_a_f <= 0 or price_b_f <= 0:
+                skipped["no_prices"] += 1
+                continue
+
+            if price_a_f > 1.0 and price_a_f <= 100.0:
+                price_a_f = price_a_f / 100.0
+            if price_b_f > 1.0 and price_b_f <= 100.0:
+                price_b_f = price_b_f / 100.0
+
+            if price_a_f <= 0 or price_b_f <= 0 or price_a_f > 1.0 or price_b_f > 1.0:
+                skipped["bad_prices"] += 1
+                continue
+
+            prob_a = price_a_f * 100
+            prob_b = price_b_f * 100
+            total_prob = prob_a + prob_b
+            if total_prob <= 0:
+                continue
+            prob_a = (prob_a / total_prob) * 100
+            prob_b = (prob_b / total_prob) * 100
+
+            resolution_date_raw = market.get('endDate') or market.get('end_date') or market.get('resolutionDate') or market.get('endDateUTC')
+            resolution_date = parse_resolution_date(resolution_date_raw)
+            if not resolution_date:
+                skipped["no_date"] += 1
+                continue
+            if resolution_date < now:
+                skipped["past_date"] += 1
+                continue
+
+            volume_24h = _safe_float(
+                market.get('volume24h')
+                or market.get('volume24hr')
+                or market.get('volume_24h')
+                or market.get('volume')
+                or market.get('volumeUsd'),
+                default=0.0
+            )
+            volume_7d = _safe_float(market.get('volume7d') or market.get('volume_7d') or volume_24h * 7, default=0.0)
+            volume_30d = _safe_float(market.get('volume30d') or market.get('volume_30d') or volume_24h * 30, default=0.0)
+
+            market_id = market.get('id') or market.get('slug') or market.get('market_id') or ''
+            if not market_id:
+                question = market.get('question') or market.get('title') or 'unknown'
+                market_id = hashlib.md5(question.encode()).hexdigest()[:16]
+
+            title = market.get('question') or market.get('title') or 'Unknown Market'
+            outcome_a_title = outcome_a_obj.get('title') or outcome_a_obj.get('name') or 'Yes'
+            outcome_b_title = outcome_b_obj.get('title') or outcome_b_obj.get('name') or 'No'
+
+            mapped.append({
+                "polymarket_id": str(market_id),
+                "title": title,
+                "description": market.get('description') or '',
+                "category": market.get('category') or market.get('tags', ['general'])[0] if isinstance(market.get('tags'), list) else 'general',
+                "outcome_a": outcome_a_title,
+                "outcome_b": outcome_b_title,
+                "outcome_a_probability": round(prob_a, 2),
+                "outcome_b_probability": round(prob_b, 2),
+                "outcome_a_odds": _probability_to_decimal_odds(prob_a),
+                "outcome_b_odds": _probability_to_decimal_odds(prob_b),
+                "resolution_date": resolution_date,
+                "volume_24h": volume_24h,
+                "volume_7d": volume_7d,
+                "volume_30d": volume_30d,
+            })
+
+        mapped.sort(key=lambda m: (_safe_float(m.get('volume_24h'), 0.0)), reverse=True)
+        print(
+            "Top-popular fetch: "
+            f"fetched={len(all_markets_data)} "
+            f"mapped={len(mapped)} "
+            f"skipped={skipped} "
+            f"returning={min(target_count, len(mapped))}"
+        )
+        return mapped[:target_count]
+    except Exception as e:
+        print(f"ERROR fetching top popular markets: {e}")
+        return []
 
 
 def fetch_polymarket_markets(limit: int = 100, use_markets_endpoint: bool = True) -> list:
@@ -462,7 +665,7 @@ def save_markets_to_db(markets: list):
     """
     if not markets:
         print("No markets to save")
-        return
+        return {"saved": 0, "updated": 0, "skipped": 0, "errors": 0}
     
     conn = None
     cursor = None
@@ -474,6 +677,7 @@ def save_markets_to_db(markets: list):
         saved_count = 0
         updated_count = 0
         skipped_count = 0
+        errors_count = 0
         
         for market in markets:
             try:
@@ -498,10 +702,13 @@ def save_markets_to_db(markets: list):
                             outcome_b = %s,
                             outcome_a_probability = %s,
                             outcome_b_probability = %s,
+                            outcome_a_odds = %s,
+                            outcome_b_odds = %s,
                             resolution_date = %s,
                             volume_24h = %s,
                             volume_7d = %s,
                             volume_30d = %s,
+                            status = 'active',
                             updated_at = now()
                         WHERE polymarket_id = %s AND status != 'resolved'
                     """, (
@@ -512,6 +719,8 @@ def save_markets_to_db(markets: list):
                         market['outcome_b'],
                         market['outcome_a_probability'],
                         market['outcome_b_probability'],
+                        market.get('outcome_a_odds'),
+                        market.get('outcome_b_odds'),
                         market.get('resolution_date'),
                         market.get('volume_24h', 0),
                         market.get('volume_7d', 0),
@@ -524,8 +733,9 @@ def save_markets_to_db(markets: list):
                         INSERT INTO public.predictions (
                             polymarket_id, title, description, category,
                             outcome_a, outcome_b, outcome_a_probability, outcome_b_probability,
+                            outcome_a_odds, outcome_b_odds,
                             resolution_date, volume_24h, volume_7d, volume_30d, status
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """, (
                         market['polymarket_id'],
                         market['title'],
@@ -535,6 +745,8 @@ def save_markets_to_db(markets: list):
                         market['outcome_b'],
                         market['outcome_a_probability'],
                         market['outcome_b_probability'],
+                        market.get('outcome_a_odds'),
+                        market.get('outcome_b_odds'),
                         market.get('resolution_date'),
                         market.get('volume_24h', 0),
                         market.get('volume_7d', 0),
@@ -545,10 +757,12 @@ def save_markets_to_db(markets: list):
                     
             except Exception as e:
                 print(f"ERROR saving market {market.get('polymarket_id')}: {e}")
+                errors_count += 1
                 continue
         
         conn.commit()
         print(f"\nSave summary: {saved_count} new, {updated_count} updated, {skipped_count} skipped (resolved)")
+        return {"saved": saved_count, "updated": updated_count, "skipped": skipped_count, "errors": errors_count}
         
     except Exception as e:
         print(f"ERROR saving markets to DB: {e}")
@@ -556,6 +770,7 @@ def save_markets_to_db(markets: list):
         traceback.print_exc()
         if conn:
             conn.rollback()
+        return {"saved": 0, "updated": 0, "skipped": 0, "errors": len(markets) if markets else 0}
     finally:
         if cursor:
             cursor.close()
@@ -564,10 +779,7 @@ def save_markets_to_db(markets: list):
 
 
 def mark_resolved_predictions():
-    """
-    Помечает пари как resolved, если resolution_date прошла
-    И автоматически выдает награды выигравшим пользователям
-    """
+    """Помечает пари как resolved, если resolution_date прошла."""
     conn = None
     cursor = None
     
@@ -575,18 +787,20 @@ def mark_resolved_predictions():
         conn = get_db_connection()
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         
-        # Находим пари, которые закончились, но еще не разрешены
+        # Находим пари, которые закончились, но еще не разрешены.
+        # FOR UPDATE SKIP LOCKED защищает от параллельных запусков (одно и то же пари обработает только один воркер).
         cursor.execute("""
-            SELECT id_prediction, outcome_a_probability, outcome_b_probability
-            FROM public.predictions 
-            WHERE status = 'active' 
-            AND resolution_date IS NOT NULL 
-            AND resolution_date < now()
+            SELECT id_prediction, outcome_a_probability, outcome_b_probability, outcome_a_odds, outcome_b_odds
+            FROM public.predictions
+            WHERE status = 'active'
+              AND resolution_date IS NOT NULL
+              AND resolution_date < now()
+            FOR UPDATE SKIP LOCKED
         """)
         
         expired_predictions = cursor.fetchall()
         resolved_count = 0
-        rewards_issued_count = 0
+        payouts_count = 0
         
         for prediction in expired_predictions:
             prediction_id = prediction['id_prediction']
@@ -600,55 +814,63 @@ def mark_resolved_predictions():
                 winner_outcome = random.choice(['A', 'B'])
             else:
                 winner_outcome = 'A' if prob_a > prob_b else 'B'
-            
-            # Обновляем статус пари
+
+            # Обновляем статус пари (идемпотентно: только если еще active)
             cursor.execute("""
-                UPDATE public.predictions 
+                UPDATE public.predictions
                 SET status = 'resolved',
                     winner_outcome = %s,
                     updated_at = now()
                 WHERE id_prediction = %s
+                  AND status = 'active'
             """, (winner_outcome, prediction_id))
-            
-            # Получаем список выигравших пользователей
+
+            if cursor.rowcount == 0:
+                continue
+
+            odds = None
+            if winner_outcome == 'A':
+                odds = prediction.get('outcome_a_odds')
+            elif winner_outcome == 'B':
+                odds = prediction.get('outcome_b_odds')
+            odds_val = float(odds) if odds is not None else 1.0
+            try:
+                import math
+                if not math.isfinite(odds_val) or odds_val <= 0:
+                    odds_val = 1.0
+            except Exception:
+                odds_val = 1.0
+
             cursor.execute("""
-                SELECT id_user FROM public.user_bets 
-                WHERE id_prediction = %s 
-                AND chosen_outcome = %s 
-                AND status = 'pending'
+                SELECT id_bet, id_user, bet_tickets
+                FROM public.user_bets
+                WHERE id_prediction = %s
+                  AND chosen_outcome = %s
+                  AND status = 'pending'
+                  AND payout_tickets IS NULL
+                FOR UPDATE
             """, (prediction_id, winner_outcome))
-            winning_users = cursor.fetchall()
-            
-            # Выдаем награды выигравшим пользователям
-            for user_row in winning_users:
-                user_id = user_row['id_user']
-                try:
-                    from core.utils import issue_prediction_reward
-                    import json
-                    rewards_issued, reward_type, reward_data = issue_prediction_reward(cursor, conn, user_id)
-                    if rewards_issued:
-                        rewards_issued_count += 1
-                        cursor.execute("""
-                            UPDATE public.user_bets 
-                            SET reward_type = %s,
-                                reward_data = %s
-                            WHERE id_prediction = %s 
-                            AND id_user = %s 
-                            AND chosen_outcome = %s 
-                            AND status = 'pending'
-                        """, (reward_type, json.dumps(reward_data) if reward_data else None, prediction_id, user_id, winner_outcome))
-                        print(f"  ✓ Issued reward to user {user_id} for prediction {prediction_id}: {reward_type}")
-                except Exception as e:
-                    print(f"  ✗ Error issuing reward to user {user_id} for prediction {prediction_id}: {e}")
-                    import traceback
-                    traceback.print_exc()
+            winning_bets = cursor.fetchall()
+            for b in winning_bets:
+                bet_tickets = int(b.get('bet_tickets') or 0)
+                payout_tickets = int(math.ceil(bet_tickets * odds_val))
+                cursor.execute("""
+                    UPDATE public.users
+                    SET tickets_bonus = tickets_bonus + %s
+                    WHERE id_user = %s
+                """, (payout_tickets, b['id_user']))
+                cursor.execute("""
+                    UPDATE public.user_bets
+                    SET payout_tickets = %s
+                    WHERE id_bet = %s
+                """, (payout_tickets, b['id_bet']))
+                payouts_count += 1
             
             # Помечаем выигравшие ставки
             cursor.execute("""
                 UPDATE public.user_bets 
                 SET status = 'won',
-                    resolved_at = now(),
-                    reward_issued = TRUE
+                    resolved_at = now()
                 WHERE id_prediction = %s 
                 AND chosen_outcome = %s 
                 AND status = 'pending'
@@ -670,7 +892,7 @@ def mark_resolved_predictions():
         
         if resolved_count > 0:
             print(f"Marked {resolved_count} predictions as resolved (resolution_date passed)")
-            print(f"Issued rewards to {rewards_issued_count} winning users")
+            print(f"Paid out tickets to {payouts_count} winning bets")
         
     except Exception as e:
         print(f"ERROR marking resolved predictions: {e}")
@@ -787,6 +1009,62 @@ def sync_polymarket_markets(target_count: int = 10):
     print(f"{'='*60}\n")
 
 
+def sync_polymarket_top_popular_markets(target_count: int = 10):
+    print(f"[{datetime.now()}] Top-popular sync starting (target={target_count})")
+    if not wait_for_db():
+        return
+
+    mark_resolved_predictions()
+
+    markets = fetch_polymarket_top_popular_markets(target_count=target_count)
+    if not markets:
+        print("Top-popular sync: no markets returned from Polymarket")
+        return
+
+    print(f"Top-popular sync: saving {len(markets)} markets")
+    save_stats = save_markets_to_db(markets)
+
+    if not save_stats or (int(save_stats.get('saved') or 0) + int(save_stats.get('updated') or 0)) <= 0:
+        print("Top-popular sync: skip cancelling actives because no markets were saved/updated")
+        return
+
+    keep_ids = [m.get('polymarket_id') for m in markets if m.get('polymarket_id')]
+    if not keep_ids:
+        return
+
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        cursor.execute(
+            """
+            UPDATE public.predictions p
+            SET status = 'cancelled',
+                updated_at = now()
+            WHERE p.status = 'active'
+              AND p.polymarket_id <> ALL(%s)
+              AND p.polymarket_id NOT LIKE 'DEV_TEST_%%'
+              AND NOT EXISTS (
+                SELECT 1 FROM public.user_bets ub
+                WHERE ub.id_prediction = p.id_prediction
+                  AND ub.status = 'pending'
+              )
+            """,
+            (keep_ids,)
+        )
+        conn.commit()
+    except Exception as e:
+        print(f"ERROR cancelling predictions not in top list: {e}")
+        if conn:
+            conn.rollback()
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+
 if __name__ == "__main__":
     import argparse
     
@@ -794,15 +1072,18 @@ if __name__ == "__main__":
     parser.add_argument('--target', type=int, default=10, help='Target number of active predictions to maintain (default: 10)')
     parser.add_argument('--daemon', action='store_true', help='Run as daemon (sync every hour)')
     parser.add_argument('--interval', type=int, default=3600, help='Sync interval in seconds (default: 3600 = 1 hour)')
+    parser.add_argument('--mode', type=str, default='filtered', choices=['filtered', 'top_popular'])
     
     args = parser.parse_args()
+
+    sync_fn = sync_polymarket_markets if args.mode == 'filtered' else sync_polymarket_top_popular_markets
     
     if args.daemon:
         print(f"Running as daemon, syncing every {args.interval} seconds...")
         print(f"Target: {args.target} active predictions")
         print(f"Starting first sync immediately...")
         try:
-            sync_polymarket_markets(target_count=args.target)
+            sync_fn(target_count=args.target)
         except Exception as e:
             print(f"ERROR in first sync: {e}")
             import traceback
@@ -812,7 +1093,7 @@ if __name__ == "__main__":
             try:
                 print(f"Waiting {args.interval} seconds until next sync...")
                 time.sleep(args.interval)
-                sync_polymarket_markets(target_count=args.target)
+                sync_fn(target_count=args.target)
             except KeyboardInterrupt:
                 print("\nStopping daemon...")
                 break
@@ -821,4 +1102,4 @@ if __name__ == "__main__":
                 import traceback
                 traceback.print_exc()
     else:
-        sync_polymarket_markets(target_count=args.target)
+        sync_fn(target_count=args.target)
